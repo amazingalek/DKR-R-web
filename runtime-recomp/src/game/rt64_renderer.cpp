@@ -388,6 +388,10 @@ dkr::runtime::RT64Renderer::RT64Renderer(
         return;
     }
     core.window = native_window.info.android.window;
+#elif defined(__EMSCRIPTEN__)
+    // RT64 draws on the page's canvas, the one SDL's window is.
+    (void)window_handle;
+    core.window = "#canvas";
 #elif defined(__linux__)
     core.window = window_handle;
 #elif defined(__APPLE__)
@@ -494,6 +498,18 @@ dkr::runtime::RT64Renderer::RT64Renderer(
             dkr::runtime::startup_performance::Clock::now();
         application_ = std::make_unique<RT64::Application>(core, application_config);
         ApplyConfig(*application_, config);
+#if defined(__EMSCRIPTEN__)
+        // On a page RT64 doesn't copy each frame back into RDRAM (render to
+        // RAM): in Chrome that readback holds every display list 5-6 ms for the
+        // GPU process. The game's CPU reads a frame only when it holds the last
+        // one on screen while a level unloads (set_frame_blackout_timer): for
+        // two frames it runs no display list and copies the last framebuffer
+        // over the next. Without render to RAM both framebuffers' RDRAM is what
+        // the game cleared them to, so the copy changes nothing RT64 checks
+        // and it keeps showing its own last frame. The desktop build keeps
+        // RT64's default.
+        application_->emulatorConfig.framebuffer.renderToRAM = false;
+#endif
         application_->userConfig.developerMode = developer_mode;
         // DKR renders a canonical 320x240 VI image. RT64's generic VI height
         // heuristic adds and rounds guard rows (often inferring 244), which

@@ -1,0 +1,623 @@
+{
+ "page": "DKR-R.html",
+ "header": ["Diddy Kong Racing (US 1.0), recorded by web/record_shaders.sh from web/shader_plan.json in headless Chrome: the", "logos and the title (section 0); the title's demo; the menus from the title to Adventure; Timber's Island; then a", "section a world: its hub, and each race, battle and boss race driven ~40 s after the countdown, the player's kart", "steered toward each checkpoint; Future Fun Land; Wizpig's two races; the trophy podium; a race's results.", "Each map is reached by web/shader_survey.js through the game's own teleport, in a page load of its own.", "Not recorded: multiplayer (split screen), Tracks mode's menus, the cutscenes between worlds, Adventure 2.", "A world's section holds every description its maps drew, those another section holds too: each is built once."],
+ "load": [
+  ["wait", 6000]
+ ],
+ "setup": [
+  ["rom", 628, 322],
+  ["wait", 3000]
+ ],
+ "start": [
+  ["click", 628, 322],
+  ["evalFile", "shader_survey.js"],
+  ["eval", "titleReached(60000)"]
+ ],
+ "sections": [
+  {
+   "name": "title",
+   "steps": [
+    ["wait", 60000]
+   ]
+  },
+  {
+   "name": "menus",
+   "steps": [
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000]
+   ]
+  },
+  {
+   "name": "timber",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "roam(30)"]
+   ]
+  },
+  {
+   "name": "dino",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(12, 25)"]
+   ]
+  },
+  {
+   "name": "dino",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(5, 45)"]
+   ]
+  },
+  {
+   "name": "dino",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(3, 45)"]
+   ]
+  },
+  {
+   "name": "dino",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(29, 45)"]
+   ]
+  },
+  {
+   "name": "dino",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(7, 45)"]
+   ]
+  },
+  {
+   "name": "dino",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(11, 45)"]
+   ]
+  },
+  {
+   "name": "dino",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(38, 45)"]
+   ]
+  },
+  {
+   "name": "dino",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(46, 45)"]
+   ]
+  },
+  {
+   "name": "snowflake",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(24, 25)"]
+   ]
+  },
+  {
+   "name": "snowflake",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(13, 45)"]
+   ]
+  },
+  {
+   "name": "snowflake",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(6, 45)"]
+   ]
+  },
+  {
+   "name": "snowflake",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(9, 45)"]
+   ]
+  },
+  {
+   "name": "snowflake",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(28, 45)"]
+   ]
+  },
+  {
+   "name": "snowflake",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(27, 45)"]
+   ]
+  },
+  {
+   "name": "snowflake",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(1, 45)"]
+   ]
+  },
+  {
+   "name": "snowflake",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(52, 45)"]
+   ]
+  },
+  {
+   "name": "sherbet",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(14, 25)"]
+   ]
+  },
+  {
+   "name": "sherbet",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(8, 45)"]
+   ]
+  },
+  {
+   "name": "sherbet",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(10, 45)"]
+   ]
+  },
+  {
+   "name": "sherbet",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(4, 45)"]
+   ]
+  },
+  {
+   "name": "sherbet",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(30, 45)"]
+   ]
+  },
+  {
+   "name": "sherbet",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(26, 45)"]
+   ]
+  },
+  {
+   "name": "sherbet",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(40, 45)"]
+   ]
+  },
+  {
+   "name": "sherbet",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(53, 45)"]
+   ]
+  },
+  {
+   "name": "dragon",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(2, 25)"]
+   ]
+  },
+  {
+   "name": "dragon",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(20, 45)"]
+   ]
+  },
+  {
+   "name": "dragon",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(18, 45)"]
+   ]
+  },
+  {
+   "name": "dragon",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(19, 45)"]
+   ]
+  },
+  {
+   "name": "dragon",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(31, 45)"]
+   ]
+  },
+  {
+   "name": "dragon",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(25, 45)"]
+   ]
+  },
+  {
+   "name": "dragon",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(41, 45)"]
+   ]
+  },
+  {
+   "name": "dragon",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(54, 45)"]
+   ]
+  },
+  {
+   "name": "futurefun",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(35, 25)"]
+   ]
+  },
+  {
+   "name": "futurefun",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(17, 45)"]
+   ]
+  },
+  {
+   "name": "futurefun",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(32, 45)"]
+   ]
+  },
+  {
+   "name": "futurefun",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(15, 45)"]
+   ]
+  },
+  {
+   "name": "futurefun",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(33, 45)"]
+   ]
+  },
+  {
+   "name": "wizpig",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(37, 45)"]
+   ]
+  },
+  {
+   "name": "wizpig",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(55, 45)"]
+   ]
+  },
+  {
+   "name": "trophy",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(34, 30)"]
+   ]
+  },
+  {
+   "name": "results",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(5, 40, 'finish')"]
+   ]
+  }
+ ]
+}

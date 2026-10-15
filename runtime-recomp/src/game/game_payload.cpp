@@ -2,6 +2,12 @@
 
 #include <atomic>
 
+// A build without the Rev A payload (the web page's, CMakeLists.txt) defines
+// this as 0, and a Rev A ROM then has no payload.
+#ifndef DKR_RUNTIME_HAS_V80
+#define DKR_RUNTIME_HAS_V80 1
+#endif
+
 namespace dkr::runtime {
 
 const GamePayload& payload_v77();
@@ -17,8 +23,10 @@ const GamePayload* payload_for(rom::Revision revision) {
     switch (revision) {
     case rom::Revision::UsV77:
         return &payload_v77();
+#if DKR_RUNTIME_HAS_V80
     case rom::Revision::UsV80:
         return &payload_v80();
+#endif
     default:
         return nullptr;
     }

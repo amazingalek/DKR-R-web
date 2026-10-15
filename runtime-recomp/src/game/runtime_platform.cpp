@@ -23,6 +23,9 @@
 #include "runtime_ui.hpp"
 #include "imgui/imgui.h"
 #include <SDL.h>
+#if defined(__EMSCRIPTEN__)
+#include "audio_output.h"
+#endif
 #if defined(_WIN32) || defined(__APPLE__)
 #include <SDL_syswm.h>
 #endif
@@ -173,6 +176,83 @@ std::uint64_t g_ui_tone_seen_generation = 0U;
 std::size_t g_ui_tone_frames_remaining = 0U;
 std::size_t g_ui_tone_total_frames = 0U;
 double g_ui_tone_phase = 0.0;
+#if defined(__EMSCRIPTEN__)
+// On a page the sound goes to N64Recomp-browser's n64recomp_browser::audio, an
+// AudioWorklet on the browser's audio thread reading a ring in the program's
+// memory: Emscripten's SDL2 plays its queue from the page's thread, where
+// WebGPU's work runs, and its sound breaks up whenever that thread is busy.
+// The ring runs at the page's audio context's rate, so an SDL audio stream
+// converts the game's rate to it. g_audio_device only marks the output open,
+// and while it is "paused" the stream holds what is queued, as SDL's paused
+// device does.
+SDL_AudioStream* g_web_audio_stream = nullptr;
+std::uint32_t g_web_audio_rate = 0;
+bool g_web_audio_paused = true;
+std::vector<float> g_web_audio_frames;
+
+void DrainWebAudio() {
+    if (g_web_audio_stream == nullptr || g_web_audio_paused) return;
+    const int available = SDL_AudioStreamAvailable(g_web_audio_stream);
+    if (available <= 0) return;
+    g_web_audio_frames.resize(static_cast<std::size_t>(available) / sizeof(float));
+    const int got = SDL_AudioStreamGet(g_web_audio_stream, g_web_audio_frames.data(), available);
+    if (got > 0) {
+        n64recomp_browser::audio::queue(g_web_audio_frames.data(),
+                                        static_cast<std::size_t>(got) / (2U * sizeof(float)));
+    }
+}
+#endif
+
+// The output's queue, in stereo frames at the game's rate: SDL's audio device,
+// or on a page the stream and the ring.
+std::size_t HostQueuedAudioFrames() {
+#if defined(__EMSCRIPTEN__)
+    if (g_web_audio_stream == nullptr || g_web_audio_rate == 0) return 0U;
+    const std::uint64_t pending = static_cast<std::uint64_t>(
+        SDL_AudioStreamAvailable(g_web_audio_stream)) / (2U * sizeof(float));
+    return static_cast<std::size_t>(
+        (pending + n64recomp_browser::audio::queued_frames()) * g_audio_frequency / g_web_audio_rate);
+#else
+    return SDL_GetQueuedAudioSize(g_audio_device) / (2U * sizeof(std::int16_t));
+#endif
+}
+
+bool HostQueueAudio(const std::int16_t* samples, std::size_t sample_count) {
+#if defined(__EMSCRIPTEN__)
+    if (SDL_AudioStreamPut(g_web_audio_stream, samples,
+                           static_cast<int>(sample_count * sizeof(std::int16_t))) != 0) {
+        return false;
+    }
+    DrainWebAudio();
+    return true;
+#else
+    return SDL_QueueAudio(g_audio_device, samples,
+                          static_cast<Uint32>(sample_count * sizeof(std::int16_t))) == 0;
+#endif
+}
+
+void HostPauseAudio(bool pause) {
+#if defined(__EMSCRIPTEN__)
+    g_web_audio_paused = pause;
+    DrainWebAudio();
+#else
+    SDL_PauseAudioDevice(g_audio_device, pause ? 1 : 0);
+#endif
+}
+
+void HostCloseAudio() {
+#if defined(__EMSCRIPTEN__)
+    // The page's output stays open; only the conversion from the game's rate goes.
+    if (g_web_audio_stream != nullptr) {
+        SDL_FreeAudioStream(g_web_audio_stream);
+        g_web_audio_stream = nullptr;
+    }
+    g_web_audio_paused = true;
+#else
+    SDL_ClearQueuedAudio(g_audio_device);
+    SDL_CloseAudioDevice(g_audio_device);
+#endif
+}
 float g_ui_tone_active_frequency_hz = 0.0F;
 std::vector<std::int16_t> g_ui_tone_buffer;
 constexpr std::uint64_t kFullscreenCursorIdleMs = 3'000U;
@@ -1433,8 +1513,15 @@ bool dkr::runtime::platform::initialise() {
     // globally opting every controller into background gameplay.
     SDL_SetHint("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1");
     const bool try_sdl3 = ShouldTrySdl3Input();
+#if defined(__EMSCRIPTEN__)
+    // Emscripten's SDL2 has no haptics or sensors, and SDL_Init fails as a
+    // whole when asked for them, gamepads with it.
+    const Uint32 sdl_flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO |
+        SDL_INIT_GAMECONTROLLER;
+#else
     const Uint32 sdl_flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO |
         SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC | SDL_INIT_SENSOR;
+#endif
     if (SDL_Init(sdl_flags) != 0) {
         std::fprintf(stderr, "[boot][platform] SDL initialization failed: %s\n", SDL_GetError());
         return false;
@@ -1479,8 +1566,7 @@ void dkr::runtime::platform::shutdown() {
         g_cursor_hidden = false;
     }
     if (g_audio_device != 0) {
-        SDL_ClearQueuedAudio(g_audio_device);
-        SDL_CloseAudioDevice(g_audio_device);
+        HostCloseAudio();
         g_audio_device = 0;
     }
     if (g_ui_audio_device != 0) {
@@ -1529,6 +1615,12 @@ ultramodern::renderer::WindowHandle dkr::runtime::platform::create_window() {
             SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS;
 #else
         Uint32 flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+#if defined(__EMSCRIPTEN__)
+        // On a page the window is the canvas, sized by the page in CSS pixels,
+        // which SDL follows; at the device's pixels a laptop's 2x scale would
+        // draw four times the pixels.
+        flags &= ~SDL_WINDOW_ALLOW_HIGHDPI;
+#endif
 #if !defined(__ANDROID__) && !defined(DKR_IOS)
         // ui::configure restores the saved graphics config before this call.
         // Use borderless desktop fullscreen, matching RT64's normal window
@@ -2118,9 +2210,7 @@ void dkr::runtime::platform::queue_audio(std::int16_t* samples,
                          sample_count, maximum_samples);
             return;
         }
-        const std::size_t queued_frames_before =
-            SDL_GetQueuedAudioSize(g_audio_device) /
-            (2U * sizeof(std::int16_t));
+        const std::size_t queued_frames_before = HostQueuedAudioFrames();
         const std::size_t submitted_frames = sample_count / 2U;
         if (g_audio_nominal_block_frames == 0U) {
             g_audio_nominal_block_frames = submitted_frames;
@@ -2149,7 +2239,7 @@ void dkr::runtime::platform::queue_audio(std::int16_t* samples,
                     // of short silence gaps. This is deliberately host-only:
                     // audio_frames_remaining() continues to expose the original
                     // emulated AI DMA state to DKR.
-                    SDL_PauseAudioDevice(g_audio_device, 1);
+                    HostPauseAudio(true);
                     g_audio_playback_started = false;
                     const std::uint32_t maximum_cushion =
                         online_audio ? 4U : 3U;
@@ -2236,15 +2326,13 @@ void dkr::runtime::platform::queue_audio(std::int16_t* samples,
             g_audio_swap_buffer[i + 1] = static_cast<std::int16_t>(
                 std::clamp(right, -32768L, 32767L));
         }
-        const auto byte_count = static_cast<Uint32>(sample_count * sizeof(std::int16_t));
-        if (SDL_QueueAudio(g_audio_device, g_audio_swap_buffer.data(), byte_count) != 0) {
+        if (!HostQueueAudio(g_audio_swap_buffer.data(), sample_count)) {
             std::fprintf(stderr, "[boot][audio] queue failed: %s\n", SDL_GetError());
         } else {
-            const std::size_t queued_frames = SDL_GetQueuedAudioSize(g_audio_device) /
-                                              (2U * sizeof(std::int16_t));
+            const std::size_t queued_frames = HostQueuedAudioFrames();
             if (!g_audio_playback_started && g_audio_prime_target_frames != 0U &&
                 queued_frames >= g_audio_prime_target_frames) {
-                SDL_PauseAudioDevice(g_audio_device, 0);
+                HostPauseAudio(false);
                 g_audio_playback_started = true;
             }
         }
@@ -2324,8 +2412,7 @@ std::size_t dkr::runtime::platform::audio_frames_remaining() {
         if (!g_audio_playback_started) {
             return 0U;
         }
-        const std::size_t queued_frames = SDL_GetQueuedAudioSize(g_audio_device) /
-                                          (2U * sizeof(std::int16_t));
+        const std::size_t queued_frames = HostQueuedAudioFrames();
         // DKR's retail audiomgr targets a small active-DMA residual when it
         // chooses the next synthesis quantum. At 22,050 Hz its aligned authored
         // frame is 736 samples; the initial no-DMA quantum is 848, leaving the
@@ -2367,8 +2454,7 @@ void dkr::runtime::platform::set_audio_frequency(std::uint32_t frequency) {
         return;
     }
     if (g_audio_device != 0) {
-        SDL_ClearQueuedAudio(g_audio_device);
-        SDL_CloseAudioDevice(g_audio_device);
+        HostCloseAudio();
         g_audio_device = 0;
     }
     if (g_ui_audio_device != 0) {
@@ -2388,7 +2474,19 @@ void dkr::runtime::platform::set_audio_frequency(std::uint32_t frequency) {
     // below the retail mix quantum; this changes host delivery granularity,
     // not DKR's emulated AI timing or sample production.
     desired.samples = 512;
+#if defined(__EMSCRIPTEN__)
+    if (g_web_audio_rate == 0) {
+        g_web_audio_rate = n64recomp_browser::audio::open(2);
+    }
+    g_web_audio_stream = SDL_NewAudioStream(AUDIO_S16SYS, 2, static_cast<int>(frequency),
+                                            AUDIO_F32SYS, 2, static_cast<int>(g_web_audio_rate));
+    g_web_audio_paused = true;
+    g_audio_device = g_web_audio_stream != nullptr ? 1U : 0U;
+    obtained = desired;
+    std::fprintf(stderr, "[boot][audio] the page's output at %u Hz\n", g_web_audio_rate);
+#else
     g_audio_device = SDL_OpenAudioDevice(nullptr, 0, &desired, &obtained, 0);
+#endif
     if (g_audio_device == 0) {
         std::fprintf(stderr, "[boot][audio] open failed at %u Hz: %s\n",
                      frequency, SDL_GetError());
@@ -2435,8 +2533,14 @@ void dkr::runtime::platform::poll_input() {
         RefreshControllers(false);
     }
     const bool blocked = dkr::runtime::ui::overlay_visible();
+#if defined(__EMSCRIPTEN__)
+    // A page gets keys and gamepads only while its tab is in front. SDL's focus there follows the window's focus and
+    // blur events, which a page that never had the window's focus (opened behind another window) never gets.
+    const bool window_focused = true;
+#else
     const bool window_focused = g_window != nullptr &&
         (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS) != 0U;
+#endif
     const bool online_routing =
         g_online_input_routing.load(std::memory_order_acquire);
     const int configured_keyboard_player =

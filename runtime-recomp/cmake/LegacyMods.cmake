@@ -56,8 +56,9 @@ set_property(SOURCE "${_dkr_xdelta_dir}/xdelta3.c" APPEND PROPERTY
 target_include_directories(DKRLegacyDelta PUBLIC "${_dkr_xdelta_dir}")
 target_include_directories(DKRLegacyDelta PRIVATE
     "${_dkr_mod_lzma_api}")
+# size_t is the target's pointer size: 4 bytes on wasm32 (the web page).
 target_compile_definitions(DKRLegacyDelta PUBLIC
-    SIZEOF_SIZE_T=8 SIZEOF_UNSIGNED_LONG_LONG=8
+    SIZEOF_SIZE_T=${CMAKE_SIZEOF_VOID_P} SIZEOF_UNSIGNED_LONG_LONG=8
     XD3_ENCODER=0 XD3_MAIN=0 SECONDARY_LZMA=1 SECONDARY_DJW=1 SECONDARY_FGK=0
     HAVE_LZMA_H=1 XD3_HARDMAXWINSIZE=16777216 NOMINMAX)
 target_compile_definitions(DKRLegacyDelta PRIVATE LZMA_API_STATIC)

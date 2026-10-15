@@ -1,0 +1,1372 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b72d0d9..c0878f4 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -755,7 +755,9 @@ build_pixel_shader(  rt64 "src/shaders/RtCopyDepthToColorPS.hlsl" "src/shaders/R
+ build_pixel_shader(  rt64 "src/shaders/RtCopyDepthToColorPS.hlsl" "src/shaders/RtCopyDepthToColor8XPS.hlsl" "-D SAMPLES_8X")
+ build_pixel_shader(  rt64 "src/shaders/TextureCopyPS.hlsl")
+ build_compute_shader(rt64 "src/shaders/TextureDecodeCS.hlsl")
+-build_compute_shader(rt64 "src/shaders/GenerateMipsCS.hlsl")
++if (NOT RT64_WGSL)
++    build_compute_shader(rt64 "src/shaders/GenerateMipsCS.hlsl")
++endif()
+ build_pixel_shader(  rt64 "src/shaders/TextureResolvePS.hlsl" "src/shaders/TextureResolveSamples2XPS.hlsl" "-D SAMPLES_2X")
+ build_pixel_shader(  rt64 "src/shaders/TextureResolvePS.hlsl" "src/shaders/TextureResolveSamples4XPS.hlsl" "-D SAMPLES_4X")
+ build_pixel_shader(  rt64 "src/shaders/TextureResolvePS.hlsl" "src/shaders/TextureResolveSamples8XPS.hlsl" "-D SAMPLES_8X")
+diff --git a/src/hle/rt64_game_frame.cpp b/src/hle/rt64_game_frame.cpp
+index 4181a2c..c3d3a00 100644
+--- a/src/hle/rt64_game_frame.cpp
++++ b/src/hle/rt64_game_frame.cpp
+@@ -2,6 +2,8 @@
+ // RT64
+ //
+ 
++#include <algorithm>
++
+ #include "common/rt64_math.h"
+ 
+ #include "rt64_game_frame.h"
+@@ -168,6 +170,55 @@ namespace RT64 {
+         return (lhs.first < rhs.first) || ((lhs.first == rhs.first) && lhs.second < rhs.second);
+     }
+ 
++    // Sorts the pairs in the order operator< gives and drops the repeats. Each pair becomes a 64-bit key that sorts the same way,
++    // and the keys are sorted a byte at a time, skipping the bytes no key uses: the indices are small, so that is a few passes.
++    static void sortUniqueIndexPairs(std::vector<IndexPair> &pairs) {
++        thread_local std::vector<uint64_t> keys;
++        thread_local std::vector<uint64_t> sortedKeys;
++        const size_t count = pairs.size();
++        keys.resize(count);
++        sortedKeys.resize(count);
++        uint64_t keyBits = 0;
++        for (size_t i = 0; i < count; i++) {
++            keys[i] = (uint64_t(pairs[i].first) << 32) | pairs[i].second;
++            keyBits |= keys[i];
++        }
++
++        for (uint32_t shift = 0; shift < 64; shift += 8) {
++            // A byte that is zero in every key leaves the order as it is.
++            if (((keyBits >> shift) & 0xFFU) == 0) {
++                continue;
++            }
++
++            uint32_t offsets[256] = {};
++            for (size_t i = 0; i < count; i++) {
++                offsets[(keys[i] >> shift) & 0xFFU]++;
++            }
++
++            uint32_t offset = 0;
++            for (uint32_t &o : offsets) {
++                const uint32_t bucketCount = o;
++                o = offset;
++                offset += bucketCount;
++            }
++
++            for (size_t i = 0; i < count; i++) {
++                sortedKeys[offsets[(keys[i] >> shift) & 0xFFU]++] = keys[i];
++            }
++
++            keys.swap(sortedKeys);
++        }
++
++        size_t uniqueCount = 0;
++        for (size_t i = 0; i < count; i++) {
++            if ((i == 0) || (keys[i] != keys[i - 1])) {
++                pairs[uniqueCount++] = IndexPair(uint32_t(keys[i] >> 32), uint32_t(keys[i]));
++            }
++        }
++
++        pairs.resize(uniqueCount);
++    }
++
+     struct MatchCandidate {
+         uint32_t curIndex = 0;
+         uint32_t prevIndex = 0;
+@@ -403,8 +454,10 @@ namespace RT64 {
+             return;
+         }
+ 
+-        thread_local std::multimap<uint64_t, GameCallMap> curCallHashMap;
+-        thread_local std::multimap<uint64_t, GameCallMap> prevCallHashMap;
++        // Sorted vectors rather than multimaps and sets: they are rebuilt for every scene of every frame, and the
++        // node allocations were most of this thread's time. Sorted the same way, so they are visited in the same order.
++        thread_local std::vector<std::pair<uint64_t, GameCallMap>> curCallHashMap;
++        thread_local std::vector<std::pair<uint64_t, GameCallMap>> prevCallHashMap;
+         curCallHashMap.clear();
+         prevCallHashMap.clear();
+ 
+@@ -509,10 +562,17 @@ namespace RT64 {
+             buildCallHashMap(p, prevWorkload, prevProj, prevCallHashMap);
+         }
+ 
++        // As a multimap orders them: by hash, and calls with the same hash in the order they were added.
++        auto byHash = [](const std::pair<uint64_t, GameCallMap> &lhs, const std::pair<uint64_t, GameCallMap> &rhs) {
++            return lhs.first < rhs.first;
++        };
++        std::stable_sort(curCallHashMap.begin(), curCallHashMap.end(), byHash);
++        std::stable_sort(prevCallHashMap.begin(), prevCallHashMap.end(), byHash);
++
+         // FIXME: Transform set needs to be done per unique workload detected.
+-        thread_local std::set<IndexPair> transformCheckSet;
+-        thread_local std::set<IndexPair> tileCheckSet;
+-        thread_local std::set<IndexPair> lookAtCheckSet;
++        thread_local std::vector<IndexPair> transformCheckSet;
++        thread_local std::vector<IndexPair> tileCheckSet;
++        thread_local std::vector<IndexPair> lookAtCheckSet;
+         transformCheckSet.clear();
+         tileCheckSet.clear();
+         lookAtCheckSet.clear();
+@@ -527,7 +587,7 @@ namespace RT64 {
+             if (!curIt.second.doTransformMatching && !curIt.second.doTileInterpolation && !curIt.second.doLookAtInterpolation) {
+                 continue;
+             }
+-            auto prevRange = prevCallHashMap.equal_range(curIt.first);
++            auto prevRange = std::equal_range(prevCallHashMap.begin(), prevCallHashMap.end(), std::pair<uint64_t, GameCallMap>{ curIt.first, {} }, byHash);
+             for (auto prevIt = prevRange.first; prevIt != prevRange.second; prevIt++) {
+                 const GameIndices::Projection &curProjIndices = curScene.projections[curIt.second.sceneProjIndex];
+                 const Workload &curWorkload = workloadQueue.workloads[curProjIndices.workloadIndex];
+@@ -550,7 +610,7 @@ namespace RT64 {
+                         const uint32_t prevGroupIndex = prevWorkload.drawData.worldTransformGroups[prevWorldMatrix];
+                         const TransformGroup &prevGroup = prevWorkload.drawData.transformGroups[prevGroupIndex];
+                         if ((curGroup.matrixId == prevGroup.matrixId) && ((curGroup.matrixId == G_EX_ID_AUTO) || ((curGroup.matrixId != G_EX_ID_IGNORE) && (curGroup.ordering == G_EX_ORDER_AUTO)))) {
+-                            transformCheckSet.emplace(curWorldMatrix, prevWorldMatrix);
++                            transformCheckSet.emplace_back(curWorldMatrix, prevWorldMatrix);
+                         }
+                     }
+                 }
+@@ -564,7 +624,7 @@ namespace RT64 {
+                             continue;
+                         }
+ 
+-                        tileCheckSet.emplace(curCall.callDesc.tileIndex + t, prevCall.callDesc.tileIndex + t);
++                        tileCheckSet.emplace_back(curCall.callDesc.tileIndex + t, prevCall.callDesc.tileIndex + t);
+                     }
+                 }
+ 
+@@ -578,11 +638,16 @@ namespace RT64 {
+                     const uint32_t prevVertexIndex = prevWorkload.drawData.faceIndices[prevCall.meshDesc.faceIndicesStart];
+                     const uint32_t curLookAtIndex = curWorkload.drawData.lookAtIndices[curVertexIndex] >> RSP_LOOKAT_INDEX_SHIFT;
+                     const uint32_t prevLookAtIndex = prevWorkload.drawData.lookAtIndices[prevVertexIndex] >> RSP_LOOKAT_INDEX_SHIFT;
+-                    lookAtCheckSet.emplace(curLookAtIndex, prevLookAtIndex);
++                    lookAtCheckSet.emplace_back(curLookAtIndex, prevLookAtIndex);
+                 }
+             }
+         }
+ 
++        // Sorted and without repeats, as the sets were.
++        for (std::vector<IndexPair> *checkSet : { &transformCheckSet, &tileCheckSet, &lookAtCheckSet }) {
++            sortUniqueIndexPairs(*checkSet);
++        }
++
+         // Compute all the differences between transforms and insert them into a vector that will be sorted according to the differences.
+         thread_local std::vector<MatchCandidate> matchCandidates;
+         matchCandidates.clear();
+@@ -793,7 +858,7 @@ namespace RT64 {
+         }
+     }
+     
+-    void GameFrame::buildCallHashMap(uint32_t sceneProjIndex, const Workload &workload, const Projection &proj, std::multimap<uint64_t, GameCallMap> &hashMap) const {
++    void GameFrame::buildCallHashMap(uint32_t sceneProjIndex, const Workload &workload, const Projection &proj, std::vector<std::pair<uint64_t, GameCallMap>> &hashMap) const {
+         for (uint32_t c = 0; c < proj.gameCallCount; c++) {
+             const GameCall &call = proj.gameCalls[c];
+             uint32_t matrixIdHash = 0;
+@@ -813,7 +878,7 @@ namespace RT64 {
+                 doLookAtInterpolation = doLookAtInterpolation || (group.lookAtInterpolation != G_EX_COMPONENT_SKIP);
+             }
+ 
+-            hashMap.emplace(hashFromCall(call, matrixIdHash), GameCallMap{ sceneProjIndex, c, doTransformMatching, doTileInterpolation, doTileMatching, doLookAtInterpolation });
++            hashMap.emplace_back(hashFromCall(call, matrixIdHash), GameCallMap{ sceneProjIndex, c, doTransformMatching, doTileInterpolation, doTileMatching, doLookAtInterpolation });
+         }
+     }
+ 
+diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
+index 4e191c2..ea44022 100644
+--- a/src/hle/rt64_workload_queue.cpp
++++ b/src/hle/rt64_workload_queue.cpp
+@@ -111,7 +111,11 @@ namespace RT64 {
+ 
+         threadsRunning = true;
+         renderThread = new std::thread(&WorkloadQueue::renderThreadLoop, this);
++#ifndef __EMSCRIPTEN__
++        // Not in a browser: it keeps a desktop driver from lowering the GPU's clock, which a page has no say in, and every
++        // dispatch would be a trip to the thread that owns the WebGPU device.
+         idleThread = new std::thread(&WorkloadQueue::idleThreadLoop, this);
++#endif
+     }
+ 
+     void WorkloadQueue::updateMultisampling() {
+@@ -238,6 +242,11 @@ namespace RT64 {
+ 
+         workloadConfig.skipBuffering = ext.sharedResources->enhancementConfig.presentation.mode ==
+             EnhancementConfiguration::Presentation::Mode::SkipBuffering;
++        // A lower rate the present queue paces the frames to while the GPU can't keep up with this one (PresentQueue::pace()).
++        const uint32_t pacedRate = ext.sharedResources->pacedRate;
++        if ((pacedRate > 0) && (pacedRate < workloadConfig.targetRate)) {
++            workloadConfig.targetRate = pacedRate;
++        }
+ 
+ #   if RT_ENABLED
+         workloadConfig.raytracingEnabled = rtEnabled;
+@@ -584,6 +593,10 @@ namespace RT64 {
+                 }
+             }
+ 
++#       if RT64_WGSL
++            RenderTarget::matchColorToDepthTargets(ext.workloadGraphicsWorker, colorDepthPairs, resizedTargets);
++#       endif
++
+             for (RenderTarget *renderTarget : resizedTargets) {
+                 renderFramebufferManager->destroyAllWithRenderTarget(renderTarget);
+             }
+@@ -704,7 +717,7 @@ namespace RT64 {
+             ext.workloadGraphicsWorker->commandList->begin();
+             ext.workloadGraphicsWorker->commandList->resetQueryPool(queryPool.get(), 0, 2);
+             ext.workloadGraphicsWorker->commandList->writeTimestamp(queryPool.get(), 0);
+-            framebufferRenderer->endFramebuffers(ext.workloadGraphicsWorker, &workload.drawBuffers, &workload.outputBuffers, workloadConfig.raytracingEnabled);
++            framebufferRenderer->endFramebuffers(ext.workloadGraphicsWorker, &workload.drawBuffers, &workload.outputBuffers, workload.drawData.gpuTiles, workload.drawData.rdpTiles, workloadConfig.raytracingEnabled);
+             framebufferRenderer->recordSetup(ext.workloadGraphicsWorker, bufferUploaders, processRSP ? rspProcessor.get() : nullptr, processWorldVertices ? vertexProcessor.get() : nullptr, &workload.outputBuffers, workloadConfig.raytracingEnabled);
+             
+             // Record all framebuffer pairs.
+@@ -905,6 +918,12 @@ namespace RT64 {
+             }
+ 
+             if (processCursor >= 0) {
++                // The game waits for the prebuilt shaders (RasterShaderCache::startPrebuild()) here, past its first frame.
++                // The present queue counts the waits, to leave the burst of presents after one out of its pacing.
++                if (ext.rasterShaderCache->waitForPrebuild()) {
++                    ext.sharedResources->prebuildWaits++;
++                }
++
+                 std::unique_lock<std::mutex> threadLock(threadMutex);
+                 Workload &workload = workloads[processCursor];
+                 ext.presentQueue->waitForPresentId(workload.presentId);
+diff --git a/src/render/rt64_generated_mip_config.h b/src/render/rt64_generated_mip_config.h
+index 27659ec..3b8d1cd 100644
+--- a/src/render/rt64_generated_mip_config.h
++++ b/src/render/rt64_generated_mip_config.h
+@@ -35,6 +35,10 @@ namespace RT64 {
+     }
+     // Called before constructing a new application/cache, never from a live checkbox.
+     inline void beginGeneratedMipSession(bool enabled) {
++#if defined(RT64_WGSL)
++        // WebGPU has no GenerateMipsCS (its texture sets and samplers are the page's own), so never on a page.
++        enabled = false;
++#endif
+         MipConfiguration::generate.store(enabled);
+         MipConfiguration::originals=0; MipConfiguration::replacements=0;
+         MipConfiguration::authored=0; MipConfiguration::singleLevel=0;
+diff --git a/src/render/rt64_shader_library.cpp b/src/render/rt64_shader_library.cpp
+index a370263..3b160b2 100644
+--- a/src/render/rt64_shader_library.cpp
++++ b/src/render/rt64_shader_library.cpp
+@@ -6,56 +6,106 @@
+ 
+ #include <algorithm>
+ #include <atomic>
++#include "rt64_rsp_processor.h"
++#include "rt64_vertex_processor.h"
+ 
+ #include "common/rt64_common.h"
+ #include "shared/rt64_render_target_copy.h"
+ #include "shared/rt64_rsp_vertex_test_z.h"
+ 
+-#include "shaders/FbChangesClearCS.hlsl.spirv.h"
+-#include "shaders/FbChangesDrawColorPS.hlsl.spirv.h"
+-#include "shaders/FbChangesDrawDepthPS.hlsl.spirv.h"
+-#include "shaders/FbReadAnyChangesCS.hlsl.spirv.h"
+-#include "shaders/FbReadAnyFullCS.hlsl.spirv.h"
+-#include "shaders/FbReinterpretCS.hlsl.spirv.h"
+-#include "shaders/FbWriteColorCS.hlsl.spirv.h"
+-#include "shaders/FbWriteDepthCS.hlsl.spirv.h"
+-#include "shaders/FbWriteDepthCSMS.hlsl.spirv.h"
+-#include "shaders/GaussianFilterRGB3x3CS.hlsl.spirv.h"
+-#include "shaders/BoxFilterCS.hlsl.spirv.h"
+-#include "shaders/BicubicScalingCS.hlsl.spirv.h"
+-#include "shaders/HistogramAverageCS.hlsl.spirv.h"
+-#include "shaders/HistogramClearCS.hlsl.spirv.h"
+-#include "shaders/HistogramSetCS.hlsl.spirv.h"
+-#include "shaders/IdleCS.hlsl.spirv.h"
+-#include "shaders/LuminanceHistogramCS.hlsl.spirv.h"
+-#include "shaders/RSPModifyCS.hlsl.spirv.h"
+-#include "shaders/RSPProcessCS.hlsl.spirv.h"
+-#include "shaders/RSPSmoothNormalCS.hlsl.spirv.h"
+-#include "shaders/RSPVertexTestZCS.hlsl.spirv.h"
+-#include "shaders/RSPVertexTestZCSMS.hlsl.spirv.h"
+-#include "shaders/RSPWorldCS.hlsl.spirv.h"
+-#include "shaders/RtCopyColorToDepthPS.hlsl.spirv.h"
+-#include "shaders/RtCopyColorToDepth2XPS.hlsl.spirv.h"
+-#include "shaders/RtCopyColorToDepth4XPS.hlsl.spirv.h"
+-#include "shaders/RtCopyColorToDepth8XPS.hlsl.spirv.h"
+-#include "shaders/RtCopyDepthToColorPS.hlsl.spirv.h"
+-#include "shaders/RtCopyDepthToColor2XPS.hlsl.spirv.h"
+-#include "shaders/RtCopyDepthToColor4XPS.hlsl.spirv.h"
+-#include "shaders/RtCopyDepthToColor8XPS.hlsl.spirv.h"
+-#include "shaders/TextureCopyPS.hlsl.spirv.h"
+-#include "shaders/TextureDecodeCS.hlsl.spirv.h"
+-#include "shaders/GenerateMipsCS.hlsl.spirv.h"
+-#include "shaders/TextureResolveSamples2XPS.hlsl.spirv.h"
+-#include "shaders/TextureResolveSamples4XPS.hlsl.spirv.h"
+-#include "shaders/TextureResolveSamples8XPS.hlsl.spirv.h"
+-#include "shaders/VideoInterfacePSRegular.hlsl.spirv.h"
+-#include "shaders/VideoInterfacePSPixel.hlsl.spirv.h"
+-#include "shaders/FullScreenVS.hlsl.spirv.h"
+-#include "shaders/Im3DVS.hlsl.spirv.h"
+-#include "shaders/ComposePS.hlsl.spirv.h"
+-#include "shaders/DebugPS.hlsl.spirv.h"
+-#include "shaders/Im3DPS.hlsl.spirv.h"
+-#include "shaders/PostProcessPS.hlsl.spirv.h"
++#if defined(RT64_WGSL)
++#   include "shaders/FbChangesClearCS.hlsl.wgsl.h"
++#   include "shaders/FbChangesDrawColorPS.hlsl.wgsl.h"
++#   include "shaders/FbChangesDrawDepthPS.hlsl.wgsl.h"
++#   include "shaders/FbReadAnyChangesCS.hlsl.wgsl.h"
++#   include "shaders/FbReadAnyFullCS.hlsl.wgsl.h"
++#   include "shaders/FbReinterpretCS.hlsl.wgsl.h"
++#   include "shaders/FbWriteColorCS.hlsl.wgsl.h"
++#   include "shaders/FbWriteDepthCS.hlsl.wgsl.h"
++#   include "shaders/FbWriteDepthCSMS.hlsl.wgsl.h"
++#   include "shaders/GaussianFilterRGB3x3CS.hlsl.wgsl.h"
++#   include "shaders/BoxFilterCS.hlsl.wgsl.h"
++#   include "shaders/BicubicScalingCS.hlsl.wgsl.h"
++#   include "shaders/HistogramAverageCS.hlsl.wgsl.h"
++#   include "shaders/HistogramClearCS.hlsl.wgsl.h"
++#   include "shaders/HistogramSetCS.hlsl.wgsl.h"
++#   include "shaders/IdleCS.hlsl.wgsl.h"
++#   include "shaders/LuminanceHistogramCS.hlsl.wgsl.h"
++#   include "shaders/RSPModifyCS.hlsl.wgsl.h"
++#   include "shaders/RSPProcessCS.hlsl.wgsl.h"
++#   include "shaders/RSPSmoothNormalCS.hlsl.wgsl.h"
++#   include "shaders/RSPVertexTestZCS.hlsl.wgsl.h"
++#   include "shaders/RSPVertexTestZCSMS.hlsl.wgsl.h"
++#   include "shaders/RSPWorldCS.hlsl.wgsl.h"
++#   include "shaders/RtCopyColorToDepthPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyColorToDepth2XPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyColorToDepth4XPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyColorToDepth8XPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyDepthToColorPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyDepthToColor2XPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyDepthToColor4XPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyDepthToColor8XPS.hlsl.wgsl.h"
++#   include "shaders/TextureCopyPS.hlsl.wgsl.h"
++#   include "shaders/TextureDecodeCS.hlsl.wgsl.h"
++#   include "shaders/TextureResolveSamples2XPS.hlsl.wgsl.h"
++#   include "shaders/TextureResolveSamples4XPS.hlsl.wgsl.h"
++#   include "shaders/TextureResolveSamples8XPS.hlsl.wgsl.h"
++#   include "shaders/VideoInterfacePSRegular.hlsl.wgsl.h"
++#   include "shaders/VideoInterfacePSPixel.hlsl.wgsl.h"
++#   include "shaders/FullScreenVS.hlsl.wgsl.h"
++#   include "shaders/Im3DVS.hlsl.wgsl.h"
++#   include "shaders/ComposePS.hlsl.wgsl.h"
++#   include "shaders/DebugPS.hlsl.wgsl.h"
++#   include "shaders/Im3DPS.hlsl.wgsl.h"
++#   include "shaders/PostProcessPS.hlsl.wgsl.h"
++#else
++#   include "shaders/FbChangesClearCS.hlsl.spirv.h"
++#   include "shaders/FbChangesDrawColorPS.hlsl.spirv.h"
++#   include "shaders/FbChangesDrawDepthPS.hlsl.spirv.h"
++#   include "shaders/FbReadAnyChangesCS.hlsl.spirv.h"
++#   include "shaders/FbReadAnyFullCS.hlsl.spirv.h"
++#   include "shaders/FbReinterpretCS.hlsl.spirv.h"
++#   include "shaders/FbWriteColorCS.hlsl.spirv.h"
++#   include "shaders/FbWriteDepthCS.hlsl.spirv.h"
++#   include "shaders/FbWriteDepthCSMS.hlsl.spirv.h"
++#   include "shaders/GaussianFilterRGB3x3CS.hlsl.spirv.h"
++#   include "shaders/BoxFilterCS.hlsl.spirv.h"
++#   include "shaders/BicubicScalingCS.hlsl.spirv.h"
++#   include "shaders/HistogramAverageCS.hlsl.spirv.h"
++#   include "shaders/HistogramClearCS.hlsl.spirv.h"
++#   include "shaders/HistogramSetCS.hlsl.spirv.h"
++#   include "shaders/IdleCS.hlsl.spirv.h"
++#   include "shaders/LuminanceHistogramCS.hlsl.spirv.h"
++#   include "shaders/RSPModifyCS.hlsl.spirv.h"
++#   include "shaders/RSPProcessCS.hlsl.spirv.h"
++#   include "shaders/RSPSmoothNormalCS.hlsl.spirv.h"
++#   include "shaders/RSPVertexTestZCS.hlsl.spirv.h"
++#   include "shaders/RSPVertexTestZCSMS.hlsl.spirv.h"
++#   include "shaders/RSPWorldCS.hlsl.spirv.h"
++#   include "shaders/RtCopyColorToDepthPS.hlsl.spirv.h"
++#   include "shaders/RtCopyColorToDepth2XPS.hlsl.spirv.h"
++#   include "shaders/RtCopyColorToDepth4XPS.hlsl.spirv.h"
++#   include "shaders/RtCopyColorToDepth8XPS.hlsl.spirv.h"
++#   include "shaders/RtCopyDepthToColorPS.hlsl.spirv.h"
++#   include "shaders/RtCopyDepthToColor2XPS.hlsl.spirv.h"
++#   include "shaders/RtCopyDepthToColor4XPS.hlsl.spirv.h"
++#   include "shaders/RtCopyDepthToColor8XPS.hlsl.spirv.h"
++#   include "shaders/TextureCopyPS.hlsl.spirv.h"
++#   include "shaders/TextureDecodeCS.hlsl.spirv.h"
++#   include "shaders/GenerateMipsCS.hlsl.spirv.h"
++#   include "shaders/TextureResolveSamples2XPS.hlsl.spirv.h"
++#   include "shaders/TextureResolveSamples4XPS.hlsl.spirv.h"
++#   include "shaders/TextureResolveSamples8XPS.hlsl.spirv.h"
++#   include "shaders/VideoInterfacePSRegular.hlsl.spirv.h"
++#   include "shaders/VideoInterfacePSPixel.hlsl.spirv.h"
++#   include "shaders/FullScreenVS.hlsl.spirv.h"
++#   include "shaders/Im3DVS.hlsl.spirv.h"
++#   include "shaders/ComposePS.hlsl.spirv.h"
++#   include "shaders/DebugPS.hlsl.spirv.h"
++#   include "shaders/DebugPSPerDraw.hlsl.spirv.h"
++#   include "shaders/Im3DPS.hlsl.spirv.h"
++#   include "shaders/PostProcessPS.hlsl.spirv.h"
++#endif
+ 
+ #ifdef _WIN32
+ #   include "shaders/FbChangesClearCS.hlsl.dxil.h"
+@@ -159,22 +209,30 @@
+ #include "rt64_descriptor_sets.h"
+ #include "rt64_render_target.h"
+ 
+-#ifdef _WIN32
+-#   define CREATE_SHADER_INPUTS(DXIL_BLOB, SPIRV_BLOB, MSL_BLOB, ENTRY_NAME, SHADER_FORMAT)\
+-        (SHADER_FORMAT == RenderShaderFormat::DXIL) ? DXIL_BLOB : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? SPIRV_BLOB : nullptr,\
+-        (SHADER_FORMAT == RenderShaderFormat::DXIL) ? sizeof(DXIL_BLOB) : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(SPIRV_BLOB) : 0,\
++// The shader's blobs are <NAME>BlobDXIL, <NAME>BlobSPIRV, <NAME>BlobMSL and <NAME>BlobWGSL; a build has the formats its
++// platform can use, and a WGSL build (WebGPU) only that one.
++#if defined(RT64_WGSL)
++#   define CREATE_SHADER_INPUTS(NAME, ENTRY_NAME, SHADER_FORMAT)\
++        (SHADER_FORMAT == RenderShaderFormat::WGSL) ? NAME##BlobWGSL : nullptr,\
++        (SHADER_FORMAT == RenderShaderFormat::WGSL) ? sizeof(NAME##BlobWGSL) : 0,\
++        ENTRY_NAME,\
++        SHADER_FORMAT
++#elif defined(_WIN32)
++#   define CREATE_SHADER_INPUTS(NAME, ENTRY_NAME, SHADER_FORMAT)\
++        (SHADER_FORMAT == RenderShaderFormat::DXIL) ? NAME##BlobDXIL : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? NAME##BlobSPIRV : nullptr,\
++        (SHADER_FORMAT == RenderShaderFormat::DXIL) ? sizeof(NAME##BlobDXIL) : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(NAME##BlobSPIRV) : 0,\
+         ENTRY_NAME,\
+         SHADER_FORMAT
+ #elif defined(__APPLE__)
+-#   define CREATE_SHADER_INPUTS(DXIL_BLOB, SPIRV_BLOB, MSL_BLOB, ENTRY_NAME, SHADER_FORMAT)\
+-        (SHADER_FORMAT == RenderShaderFormat::METAL) ? MSL_BLOB : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? SPIRV_BLOB : nullptr,\
+-        (SHADER_FORMAT == RenderShaderFormat::METAL) ? sizeof(MSL_BLOB) : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(SPIRV_BLOB) : 0,\
++#   define CREATE_SHADER_INPUTS(NAME, ENTRY_NAME, SHADER_FORMAT)\
++        (SHADER_FORMAT == RenderShaderFormat::METAL) ? NAME##BlobMSL : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? NAME##BlobSPIRV : nullptr,\
++        (SHADER_FORMAT == RenderShaderFormat::METAL) ? sizeof(NAME##BlobMSL) : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(NAME##BlobSPIRV) : 0,\
+         ENTRY_NAME,\
+         SHADER_FORMAT
+ #else
+-#   define CREATE_SHADER_INPUTS(DXIL_BLOB, SPIRV_BLOB, MSL_BLOB, ENTRY_NAME, SHADER_FORMAT)\
+-        (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? SPIRV_BLOB : nullptr,\
+-        (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(SPIRV_BLOB) : 0,\
++#   define CREATE_SHADER_INPUTS(NAME, ENTRY_NAME, SHADER_FORMAT)\
++        (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? NAME##BlobSPIRV : nullptr,\
++        (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(NAME##BlobSPIRV) : 0,\
+         ENTRY_NAME,\
+         SHADER_FORMAT
+ #endif
+@@ -223,7 +281,7 @@ namespace RT64 {
+         RenderPipelineLayoutBuilder layoutBuilder;
+ 
+         // Create shaders shared across all pipelines.
+-        std::unique_ptr<RenderShader> fullScreenVertexShader = device->createShader(CREATE_SHADER_INPUTS(FullScreenVSBlobDXIL, FullScreenVSBlobSPIRV, FullScreenVSBlobMSL, "VSMain", shaderFormat));
++        std::unique_ptr<RenderShader> fullScreenVertexShader = device->createShader(CREATE_SHADER_INPUTS(FullScreenVS, "VSMain", shaderFormat));
+         
+         auto fillSamplerSet = [&](SamplerSet &set, RenderFilter filter, bool anisotropyEnabled) {
+             RenderSamplerDesc samplerDesc;
+@@ -294,7 +352,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             bicubicScaling.pipelineLayout = layoutBuilder.create(device);
+             
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(BicubicScalingCSBlobDXIL, BicubicScalingCSBlobSPIRV, BicubicScalingCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(BicubicScalingCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(bicubicScaling.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             bicubicScaling.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -308,7 +366,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             boxFilter.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(BoxFilterCSBlobDXIL, BoxFilterCSBlobSPIRV, BoxFilterCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(BoxFilterCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(boxFilter.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             boxFilter.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -321,7 +379,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             compose.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(ComposePSBlobDXIL, ComposePSBlobSPIRV, ComposePSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(ComposePS, "PSMain", shaderFormat));
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.pipelineLayout = compose.pipelineLayout.get();
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::AlphaBlend();
+@@ -381,7 +439,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             idle.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(IdleCSBlobDXIL, IdleCSBlobSPIRV, IdleCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(IdleCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(idle.pipelineLayout.get(), computeShader.get(), 1, 1, 1);
+             idle.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -394,7 +452,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             fbChangesClear.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesClearCSBlobDXIL, FbChangesClearCSBlobSPIRV, FbChangesClearCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesClearCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(fbChangesClear.pipelineLayout.get(), computeShader.get(), 1, 1, 1);
+             fbChangesClear.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -411,10 +469,10 @@ namespace RT64 {
+             fbReadAnyChanges.pipelineLayout = layoutBuilder.create(device);
+             fbReadAnyFull.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> anyChangesShader = device->createShader(CREATE_SHADER_INPUTS(FbReadAnyChangesCSBlobDXIL, FbReadAnyChangesCSBlobSPIRV, FbReadAnyChangesCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> anyChangesShader = device->createShader(CREATE_SHADER_INPUTS(FbReadAnyChangesCS, "CSMain", shaderFormat));
+             fbReadAnyChanges.pipeline = device->createComputePipeline(RenderComputePipelineDesc(fbReadAnyChanges.pipelineLayout.get(), anyChangesShader.get(), 8, 8, 1));
+ 
+-            std::unique_ptr<RenderShader> fullShader = device->createShader(CREATE_SHADER_INPUTS(FbReadAnyFullCSBlobDXIL, FbReadAnyFullCSBlobSPIRV, FbReadAnyFullCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> fullShader = device->createShader(CREATE_SHADER_INPUTS(FbReadAnyFullCS, "CSMain", shaderFormat));
+             fbReadAnyFull.pipeline = device->createComputePipeline(RenderComputePipelineDesc(fbReadAnyFull.pipelineLayout.get(), fullShader.get(), 8, 8, 1));
+         }
+ 
+@@ -427,7 +485,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             fbReinterpret.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(FbReinterpretCSBlobDXIL, FbReinterpretCSBlobSPIRV, FbReinterpretCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(FbReinterpretCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(fbReinterpret.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             fbReinterpret.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -445,13 +503,13 @@ namespace RT64 {
+             fbWriteDepth.pipelineLayout = layoutBuilder.create(device);
+             fbWriteDepthMS.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> colorShader = device->createShader(CREATE_SHADER_INPUTS(FbWriteColorCSBlobDXIL, FbWriteColorCSBlobSPIRV, FbWriteColorCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> colorShader = device->createShader(CREATE_SHADER_INPUTS(FbWriteColorCS, "CSMain", shaderFormat));
+             fbWriteColor.pipeline = device->createComputePipeline(RenderComputePipelineDesc(fbWriteColor.pipelineLayout.get(), colorShader.get(), 8, 8, 1));
+ 
+-            std::unique_ptr<RenderShader> depthShader = device->createShader(CREATE_SHADER_INPUTS(FbWriteDepthCSBlobDXIL, FbWriteDepthCSBlobSPIRV, FbWriteDepthCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> depthShader = device->createShader(CREATE_SHADER_INPUTS(FbWriteDepthCS, "CSMain", shaderFormat));
+             fbWriteDepth.pipeline = device->createComputePipeline(RenderComputePipelineDesc(fbWriteDepth.pipelineLayout.get(), depthShader.get(), 8, 8, 1));
+ 
+-            std::unique_ptr<RenderShader> depthShaderMS = device->createShader(CREATE_SHADER_INPUTS(FbWriteDepthCSMSBlobDXIL, FbWriteDepthCSMSBlobSPIRV, FbWriteDepthCSMSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> depthShaderMS = device->createShader(CREATE_SHADER_INPUTS(FbWriteDepthCSMS, "CSMain", shaderFormat));
+             fbWriteDepthMS.pipeline = device->createComputePipeline(RenderComputePipelineDesc(fbWriteDepthMS.pipelineLayout.get(), depthShaderMS.get(), 8, 8, 1));
+         }
+ 
+@@ -464,7 +522,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             gaussianFilterRGB3x3.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(GaussianFilterRGB3x3CSBlobDXIL, GaussianFilterRGB3x3CSBlobSPIRV, GaussianFilterRGB3x3CSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(GaussianFilterRGB3x3CS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(gaussianFilterRGB3x3.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             gaussianFilterRGB3x3.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -478,7 +536,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             histogramAverage.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramAverageCSBlobDXIL, HistogramAverageCSBlobSPIRV, HistogramAverageCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramAverageCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(histogramAverage.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             histogramAverage.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -491,7 +549,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             histogramClear.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramClearCSBlobDXIL, HistogramClearCSBlobSPIRV, HistogramClearCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramClearCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(histogramClear.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             histogramClear.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -505,7 +563,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             histogramSet.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramSetCSBlobDXIL, HistogramSetCSBlobSPIRV, HistogramSetCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramSetCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(histogramSet.pipelineLayout.get(), computeShader.get(), 1, 1, 1);
+             histogramSet.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -519,7 +577,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             luminanceHistogram.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(LuminanceHistogramCSBlobDXIL, LuminanceHistogramCSBlobSPIRV, LuminanceHistogramCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(LuminanceHistogramCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(luminanceHistogram.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             luminanceHistogram.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -533,7 +591,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             rspModify.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPModifyCSBlobDXIL, RSPModifyCSBlobSPIRV, RSPModifyCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPModifyCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(rspModify.pipelineLayout.get(), computeShader.get(), 64, 1, 1);
+             rspModify.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -542,12 +600,12 @@ namespace RT64 {
+         {
+             RSPProcessDescriptorSet descriptorSet;
+             layoutBuilder.begin();
+-            layoutBuilder.addPushConstant(0, 0, sizeof(uint32_t) * 4, RenderShaderStageFlag::COMPUTE);
++            layoutBuilder.addPushConstant(0, 0, sizeof(RSPProcessor::ProcessCB), RenderShaderStageFlag::COMPUTE);
+             layoutBuilder.addDescriptorSet(descriptorSet);
+             layoutBuilder.end();
+             rspProcess.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPProcessCSBlobDXIL, RSPProcessCSBlobSPIRV, RSPProcessCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPProcessCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(rspProcess.pipelineLayout.get(), computeShader.get(), 64, 1, 1);
+             rspProcess.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -561,7 +619,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             rspSmoothNormal.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPSmoothNormalCSBlobDXIL, RSPSmoothNormalCSBlobSPIRV, RSPSmoothNormalCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPSmoothNormalCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(rspSmoothNormal.pipelineLayout.get(), computeShader.get(), 64, 1, 1);
+             rspSmoothNormal.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -570,12 +628,12 @@ namespace RT64 {
+         {
+             RSPWorldDescriptorSet descriptorSet;
+             layoutBuilder.begin();
+-            layoutBuilder.addPushConstant(0, 0, sizeof(uint32_t) * 4, RenderShaderStageFlag::COMPUTE);
++            layoutBuilder.addPushConstant(0, 0, sizeof(VertexProcessor::WorldCB), RenderShaderStageFlag::COMPUTE);
+             layoutBuilder.addDescriptorSet(descriptorSet);
+             layoutBuilder.end();
+             rspWorld.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPWorldCSBlobDXIL, RSPWorldCSBlobSPIRV, RSPWorldCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPWorldCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(rspWorld.pipelineLayout.get(), computeShader.get(), 64, 1, 1);
+             rspWorld.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -589,7 +647,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             textureCopy.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(TextureCopyPSBlobDXIL, TextureCopyPSBlobSPIRV, TextureCopyPSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(TextureCopyPS, "PSMain", shaderFormat));
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.pipelineLayout = textureCopy.pipelineLayout.get();
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
+@@ -609,12 +667,14 @@ namespace RT64 {
+             layoutBuilder.end();
+             textureDecode.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(TextureDecodeCSBlobDXIL, TextureDecodeCSBlobSPIRV, TextureDecodeCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(TextureDecodeCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(textureDecode.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             textureDecode.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+ 
++#   if !defined(RT64_WGSL)
+         // Optional generated mips: same t1/u2 descriptor shape, separate resources.
++        // Not on WebGPU: the page never generates them (rt64_generated_mip_config.h).
+         {
+             TextureDecodeDescriptorSet descriptorSet;
+             layoutBuilder.begin();
+@@ -622,14 +682,15 @@ namespace RT64 {
+             layoutBuilder.addDescriptorSet(descriptorSet);
+             layoutBuilder.end();
+             generateMips.pipelineLayout = layoutBuilder.create(device);
+-            auto computeShader = device->createShader(CREATE_SHADER_INPUTS(GenerateMipsCSBlobDXIL, GenerateMipsCSBlobSPIRV, GenerateMipsCSBlobMSL, "CSMain", shaderFormat));
++            auto computeShader = device->createShader(CREATE_SHADER_INPUTS(GenerateMipsCS, "CSMain", shaderFormat));
+             generateMips.pipeline = device->createComputePipeline(RenderComputePipelineDesc(generateMips.pipelineLayout.get(), computeShader.get(), 8, 8, 1));
+         }
++#   endif
+ 
+         // Video Interface.
+         {
+-            std::unique_ptr<RenderShader> regularShader = device->createShader(CREATE_SHADER_INPUTS(VideoInterfacePSRegularBlobDXIL, VideoInterfacePSRegularBlobSPIRV, VideoInterfacePSRegularBlobMSL, "PSMain", shaderFormat));
+-            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(VideoInterfacePSPixelBlobDXIL, VideoInterfacePSPixelBlobSPIRV, VideoInterfacePSPixelBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> regularShader = device->createShader(CREATE_SHADER_INPUTS(VideoInterfacePSRegular, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(VideoInterfacePSPixel, "PSMain", shaderFormat));
+ 
+             VideoInterfaceDescriptorSet nearestDescriptorSet(samplerLibrary.nearest.borderBorder.get());
+             VideoInterfaceDescriptorSet linearDescriptorSet(samplerLibrary.linear.borderBorder.get());
+@@ -642,7 +703,7 @@ namespace RT64 {
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.vertexShader = fullScreenVertexShader.get();
+             pipelineDesc.pixelShader = regularShader.get();
+-            pipelineDesc.renderTargetFormat[0] = RenderFormat::B8G8R8A8_UNORM; // TODO: Use whatever format the swap chain was created with.
++            pipelineDesc.renderTargetFormat[0] = device->getCapabilities().preferredSwapChainFormat;
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
+             pipelineDesc.renderTargetCount = 1;
+             pipelineDesc.pipelineLayout = videoInterfaceNearest.pipelineLayout.get();
+@@ -675,7 +736,7 @@ namespace RT64 {
+         RenderPipelineLayoutBuilder layoutBuilder;
+ 
+         // Create shaders shared across all pipelines.
+-        std::unique_ptr<RenderShader> fullScreenVertexShader = device->createShader(CREATE_SHADER_INPUTS(FullScreenVSBlobDXIL, FullScreenVSBlobSPIRV, FullScreenVSBlobMSL, "VSMain", shaderFormat));
++        std::unique_ptr<RenderShader> fullScreenVertexShader = device->createShader(CREATE_SHADER_INPUTS(FullScreenVS, "VSMain", shaderFormat));
+ 
+         // Select shader blobs based on sample count.
+         const void *TextureResolvePSBlob = nullptr;
+@@ -760,6 +821,41 @@ namespace RT64 {
+         }
+         else
+ #   endif
++#   if defined(RT64_WGSL)
++        if (shaderFormat == RenderShaderFormat::WGSL) {
++            RtCopyDepthToColorPSBlob = RtCopyDepthToColorPSBlobWGSL;
++            RtCopyDepthToColorPSBlobSize = std::size(RtCopyDepthToColorPSBlobWGSL);
++            RtCopyColorToDepthPSBlob = RtCopyColorToDepthPSBlobWGSL;
++            RtCopyColorToDepthPSBlobSize = std::size(RtCopyColorToDepthPSBlobWGSL);
++
++            switch (multisampling.sampleCount) {
++            case RenderSampleCount::COUNT_2:
++                TextureResolvePSBlob = TextureResolveSamples2XPSBlobWGSL;
++                TextureResolvePSBlobSize = std::size(TextureResolveSamples2XPSBlobWGSL);
++                RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor2XPSBlobWGSL;
++                RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor2XPSBlobWGSL);
++                RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth2XPSBlobWGSL;
++                RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth2XPSBlobWGSL);
++                break;
++            case RenderSampleCount::COUNT_4:
++                TextureResolvePSBlob = TextureResolveSamples4XPSBlobWGSL;
++                TextureResolvePSBlobSize = std::size(TextureResolveSamples4XPSBlobWGSL);
++                RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor4XPSBlobWGSL;
++                RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor4XPSBlobWGSL);
++                RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth4XPSBlobWGSL;
++                RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth4XPSBlobWGSL);
++                break;
++            case RenderSampleCount::COUNT_8:
++                TextureResolvePSBlob = TextureResolveSamples8XPSBlobWGSL;
++                TextureResolvePSBlobSize = std::size(TextureResolveSamples8XPSBlobWGSL);
++                RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor8XPSBlobWGSL;
++                RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor8XPSBlobWGSL);
++                RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth8XPSBlobWGSL;
++                RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth8XPSBlobWGSL);
++                break;
++            }
++        }
++#   else
+         if (shaderFormat == RenderShaderFormat::SPIRV) {
+             RtCopyDepthToColorPSBlob = RtCopyDepthToColorPSBlobSPIRV;
+             RtCopyDepthToColorPSBlobSize = std::size(RtCopyDepthToColorPSBlobSPIRV);
+@@ -793,6 +889,7 @@ namespace RT64 {
+                 break;
+             }
+         }
++#   endif
+         else {
+             assert(false && "Unknown shader format.");
+         }
+@@ -807,7 +904,7 @@ namespace RT64 {
+             fbChangesDrawColor.pipelineLayout = layoutBuilder.create(device);
+             fbChangesDrawDepth.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> colorShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesDrawColorPSBlobDXIL, FbChangesDrawColorPSBlobSPIRV, FbChangesDrawColorPSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> colorShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesDrawColorPS, "PSMain", shaderFormat));
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.pipelineLayout = fbChangesDrawColor.pipelineLayout.get();
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
+@@ -818,7 +915,7 @@ namespace RT64 {
+             pipelineDesc.multisampling = multisampling;
+             fbChangesDrawColor.pipeline = device->createGraphicsPipeline(pipelineDesc);
+ 
+-            std::unique_ptr<RenderShader> depthShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesDrawDepthPSBlobDXIL, FbChangesDrawDepthPSBlobSPIRV, FbChangesDrawDepthPSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> depthShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesDrawDepthPS, "PSMain", shaderFormat));
+             pipelineDesc.pipelineLayout = fbChangesDrawDepth.pipelineLayout.get();
+             pipelineDesc.pixelShader = depthShader.get();
+             pipelineDesc.depthEnabled = true;
+@@ -883,7 +980,7 @@ namespace RT64 {
+             layoutBuilder.end();
+             postProcess.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(PostProcessPSBlobDXIL, PostProcessPSBlobSPIRV, PostProcessPSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(PostProcessPS, "PSMain", shaderFormat));
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.pipelineLayout = postProcess.pipelineLayout.get();
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::AlphaBlend();
+@@ -898,17 +995,25 @@ namespace RT64 {
+         // Raytracing debug.
+         {
+             FramebufferRendererDescriptorCommonSet descriptorCommonSet(samplerLibrary, deviceCapabilities.raytracing);
+-            FramebufferRendererDescriptorTextureSet descriptorTextureSet;
+             FramebufferRendererDescriptorFramebufferSet descriptorFramebufferSet;
+             layoutBuilder.begin();
+             layoutBuilder.addDescriptorSet(descriptorCommonSet);
+-            layoutBuilder.addDescriptorSet(descriptorTextureSet);
+-            layoutBuilder.addDescriptorSet(descriptorTextureSet);
++            addFramebufferRendererTextureSets(layoutBuilder, deviceCapabilities);
+             layoutBuilder.addDescriptorSet(descriptorFramebufferSet);
+             layoutBuilder.end();
+             debug.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(DebugPSBlobDXIL, DebugPSBlobSPIRV, DebugPSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> pixelShader;
++#       if !defined(RT64_WGSL)
++            if (shaderFormat == RenderShaderFormat::SPIRV) {
++                const SPIRVBlob blob = RT64_TEXTURE_SETS_SPIRV(DebugPS, deviceCapabilities);
++                pixelShader = device->createShader(blob.data, blob.size, "PSMain", shaderFormat);
++            }
++            else
++#       endif
++            {
++                pixelShader = device->createShader(CREATE_SHADER_INPUTS(DebugPS, "PSMain", shaderFormat));
++            }
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.pipelineLayout = debug.pipelineLayout.get();
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::AlphaBlend();
+@@ -932,10 +1037,10 @@ namespace RT64 {
+             rspVertexTestZ.pipelineLayout = layoutBuilder.create(device);
+             rspVertexTestZMS.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPVertexTestZCSBlobDXIL, RSPVertexTestZCSBlobSPIRV, RSPVertexTestZCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPVertexTestZCS, "CSMain", shaderFormat));
+             rspVertexTestZ.pipeline = device->createComputePipeline(RenderComputePipelineDesc(rspVertexTestZ.pipelineLayout.get(), computeShader.get(), 1, 1, 1));
+ 
+-            std::unique_ptr<RenderShader> computeShaderMS = device->createShader(CREATE_SHADER_INPUTS(RSPVertexTestZCSMSBlobDXIL, RSPVertexTestZCSMSBlobSPIRV, RSPVertexTestZCSMSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShaderMS = device->createShader(CREATE_SHADER_INPUTS(RSPVertexTestZCSMS, "CSMain", shaderFormat));
+             rspVertexTestZMS.pipeline = device->createComputePipeline(RenderComputePipelineDesc(rspVertexTestZMS.pipelineLayout.get(), computeShaderMS.get(), 1, 1, 1));
+         }
+ 
+diff --git a/src/shaders/RasterPS.hlsl b/src/shaders/RasterPS.hlsl
+index 9b495ed..7b68481 100644
+--- a/src/shaders/RasterPS.hlsl
++++ b/src/shaders/RasterPS.hlsl
+@@ -48,6 +48,13 @@ float sampleBackgroundDepth(int2 pixelPos, uint sampleCount) {
+ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float2 vertexUV, float4 vertexSmoothColor, float4 vertexFlatColor,
+     bool isFrontFace, out float4 resultColor, out float4 resultAlpha) 
+ {
++    // Derivatives first, while every pixel of the quad is still running: they are undefined after a pixel returns, and
++    // WGSL refuses them in control flow that can differ between pixels.
++    const float ddxDepth = ddx(vertexPosition.z);
++    const float ddyDepth = ddy(vertexPosition.z);
++    float2 ddxVertexUV = ddx(vertexUV);
++    float2 ddyVertexUV = ddy(vertexUV);
++
+     const OtherMode otherMode = { rp.omL, rp.omH };
+ #if defined(DYNAMIC_RENDER_PARAMS)
+     if ((otherMode.cycleType() != G_CYC_COPY) && renderFlagCulling(rp.flags) && isFrontFace) {
+@@ -100,7 +107,7 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+             dz = instanceRDPParams[instanceIndex].primDepth.y;
+         }
+         else {
+-            dz = (abs(ddx(vertexPosition.z)) + abs(ddy(vertexPosition.z))) * FbParams.resolutionScale.y;
++            dz = (abs(ddxDepth) + abs(ddyDepth)) * FbParams.resolutionScale.y;
+         }
+ 
+         // Perform the decal depth tolerance check.
+@@ -111,15 +118,24 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+         }
+     }
+     
+-    float2 ddxVertexUV = ddx(vertexUV);
+-    float2 ddyVertexUV = ddy(vertexUV);
+     float2 lowResUV = vertexUV;
+     if (!renderFlagUpscale2D(rp.flags)) {
+         float2 screenPos = floor(vertexPosition.xy);
+         screenPos.x += FbParams.horizontalMisalignment;
+         lowResUV -= fmod(screenPos.xy, FbParams.resolutionScale.yy) * float2(ddxVertexUV.x, ddyVertexUV.y);
+     }
+-    
++
++    // A high resolution tile is sampled at vertexUV, which on a rect drawn backwards (a negative dsdx or dtdy) runs
++    // one native pixel behind the texel the low resolution UV picks, so its last row or column samples outside the
++    // tile. With FLIPPED_RECT_HIGH_RES (RT64_FLIPPED_RECT_HIGH_RES, on with WGSL) each native pixel starts at the texel
++    // it shows instead.
++    float2 highResUV = vertexUV;
++#if defined(FLIPPED_RECT_HIGH_RES)
++    if (renderFlagRect(rp.flags) && !renderFlagUpscale2D(rp.flags)) {
++        highResUV -= min(float2(ddxVertexUV.x, ddyVertexUV.y), 0.0f) * FbParams.resolutionScale.yy;
++    }
++#endif
++
+     int tileIndex0 = 0;
+     int tileIndex1 = 1;
+     float lodFraction;
+@@ -141,14 +157,15 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+             rdpTile.nativeSampler = renderFlagNativeSampler0(rp.flags);
+         }
+         
+-        const GPUTile gpuTile = GPUTiles[globalTileIndex];
+-        const float2 textureUV = gpuTileFlagHighRes(gpuTile.flags) ? vertexUV : lowResUV;
+-        texVal0 = sampleTexture(otherMode, rp.flags, textureUV, ddxVertexUV, ddyVertexUV, rdpTile, gpuTile, false, gConstants.mipLODBias, gConstants.generatedMipmaps != 0);
++        const GPUTile gpuTile = drawGPUTile(instanceRenderIndices[gConstants.renderIndex].rdpTileIndex, tileIndex0);
++        const float2 textureUV = gpuTileFlagHighRes(gpuTile.flags) ? highResUV : lowResUV;
++        texVal0 = sampleTexture(otherMode, rp.flags, textureUV, ddxVertexUV, ddyVertexUV, rdpTile, gpuTile, false);
+     }
+     
+     if (renderFlagUsesTexture1(rp.flags)) {
+         const bool oneCycleHardwareBug = (otherMode.cycleType() == G_CYC_1CYCLE);
+-        const uint globalTileIndex = instanceRenderIndices[gConstants.renderIndex].rdpTileIndex + (oneCycleHardwareBug ? tileIndex0 : tileIndex1);
++        const uint tileIndex = oneCycleHardwareBug ? tileIndex0 : tileIndex1;
++        const uint globalTileIndex = instanceRenderIndices[gConstants.renderIndex].rdpTileIndex + tileIndex;
+         RDPTile rdpTile = RDPTiles[globalTileIndex];
+         if (!renderFlagDynamicTiles(rp.flags)) {
+             rdpTile.cms = oneCycleHardwareBug ? renderCMS0(rp.flags) : renderCMS1(rp.flags);
+@@ -156,10 +173,10 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+             rdpTile.nativeSampler = oneCycleHardwareBug ? renderFlagNativeSampler0(rp.flags) : renderFlagNativeSampler1(rp.flags);
+         }
+         
+-        const GPUTile gpuTile = GPUTiles[globalTileIndex];
+-        const float2 textureUV = gpuTileFlagHighRes(gpuTile.flags) ? vertexUV : lowResUV;
++        const GPUTile gpuTile = drawGPUTile(instanceRenderIndices[gConstants.renderIndex].rdpTileIndex, tileIndex);
++        const float2 textureUV = gpuTileFlagHighRes(gpuTile.flags) ? highResUV : lowResUV;
+         const uint nativeSampler = renderFlagNativeSampler1(rp.flags);
+-        texVal1 = sampleTexture(otherMode, rp.flags, textureUV, ddxVertexUV, ddyVertexUV, rdpTile, gpuTile, oneCycleHardwareBug, gConstants.mipLODBias, gConstants.generatedMipmaps != 0);
++        texVal1 = sampleTexture(otherMode, rp.flags, textureUV, ddxVertexUV, ddyVertexUV, rdpTile, gpuTile, oneCycleHardwareBug);
+     }
+     
+     // Color combiner.
+@@ -254,6 +271,14 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+         resultColor.a = resultCvg;
+     }
+     
++#if defined(WEBGPU) && !defined(DUAL_SOURCE_BLENDING)
++    // Without dual-source blending, which WebGPU leaves optional, an alpha-blended draw blends by the alpha of its one
++    // output, so the blend factor takes the coverage's place there.
++    if (alphaBlend) {
++        resultColor.a = resultAlpha.a;
++    }
++#endif
++
+     // Add highlight color to the last step.
+     uint highlightColorUint = instanceRenderIndices[gConstants.renderIndex].highlightColor;
+     if (highlightColorUint > 0) {
+@@ -290,8 +315,12 @@ void PSMain(
+ #if defined(DYNAMIC_RENDER_PARAMS)
+     , bool isFrontFace : SV_IsFrontFace
+ #endif
++#if defined(WEBGPU) && !defined(DUAL_SOURCE_BLENDING)
++    , [[vk::location(0)]] out float4 pixelColor : SV_TARGET0
++#else
+     , [[vk::location(0)]] [[vk::index(0)]] out float4 pixelColor : SV_TARGET0
+     , [[vk::location(0)]] [[vk::index(1)]] out float4 pixelAlpha : SV_TARGET1
++#endif
+ )
+ {
+ #if !defined(DYNAMIC_RENDER_PARAMS)
+@@ -308,6 +337,8 @@ void PSMain(
+     }
+ 
+     pixelColor = resultColor;
++#if !defined(WEBGPU) || defined(DUAL_SOURCE_BLENDING)
+     pixelAlpha = resultAlpha;
+-}
+ #endif
++}
++#endif
+\ No newline at end of file
+diff --git a/src/shaders/TextureSampler.hlsli b/src/shaders/TextureSampler.hlsli
+index 45ea243..5b2b8d9 100644
+--- a/src/shaders/TextureSampler.hlsli
++++ b/src/shaders/TextureSampler.hlsli
+@@ -24,6 +24,88 @@
+ #define USE_FOR_LOOPS 0
+ #endif
+ 
++// Where a tile's texture is. With descriptor indexing, textureIndex is the texture cache index of the tile's texture
++// (set 1) or of its TMEM (set 2). Without it (PER_DRAW_TEXTURES), the renderer binds each draw's textures in a set of
++// their own, one slot per tile of the draw, so a texture is picked by the tile's number within its draw, which
++// drawGPUTile() puts in drawSlot. The cache index still finds the TMEM, in gTMEMPool. A switch picks the slot, since
++// core WebGPU can't index bindings. The slot is never read from a buffer, so a specialized shader that knows the
++// tile's number (one without mip LOD) knows its slot, and spirv-opt keeps only that case. In the bits of textureIndex,
++// every texture read stayed a switch of 8 reads: a prebuilt pixel shader without LOD is a third of the WGSL without
++// it, and in Firefox 158, which builds pipelines one at a time, Majora's Mask's Clock Town took 9.3-10.4 s against
++// 15.1-18.2 s and Rush 2049's boot 11.9-12.6 s against 13.6-14.6 s (RTX 2070). Shaders with LOD keep the switch.
++#ifdef PER_DRAW_TEXTURES
++#define tileTMEM(gpuTile) ((gpuTile).textureIndex * RDP_TMEM_BYTES)
++
++#define TILE_TEXTURE_SWITCH(gpuTile, TEXTURE_CALL) \
++    switch ((gpuTile).drawSlot) { \
++    case 0: return TEXTURE_CALL(gTileTexture0); \
++    case 1: return TEXTURE_CALL(gTileTexture1); \
++    case 2: return TEXTURE_CALL(gTileTexture2); \
++    case 3: return TEXTURE_CALL(gTileTexture3); \
++    case 4: return TEXTURE_CALL(gTileTexture4); \
++    case 5: return TEXTURE_CALL(gTileTexture5); \
++    case 6: return TEXTURE_CALL(gTileTexture6); \
++    default: return TEXTURE_CALL(gTileTexture7); \
++    }
++
++// The same with the slot's sampler (gTileSampler0 to 7), for a linear sample.
++#define TILE_TEXTURE_SAMPLER_SWITCH(gpuTile, TEXTURE_SAMPLER_CALL) \
++    switch ((gpuTile).drawSlot) { \
++    case 0: return TEXTURE_SAMPLER_CALL(gTileTexture0, gTileSampler0); \
++    case 1: return TEXTURE_SAMPLER_CALL(gTileTexture1, gTileSampler1); \
++    case 2: return TEXTURE_SAMPLER_CALL(gTileTexture2, gTileSampler2); \
++    case 3: return TEXTURE_SAMPLER_CALL(gTileTexture3, gTileSampler3); \
++    case 4: return TEXTURE_SAMPLER_CALL(gTileTexture4, gTileSampler4); \
++    case 5: return TEXTURE_SAMPLER_CALL(gTileTexture5, gTileSampler5); \
++    case 6: return TEXTURE_SAMPLER_CALL(gTileTexture6, gTileSampler6); \
++    default: return TEXTURE_SAMPLER_CALL(gTileTexture7, gTileSampler7); \
++    }
++#else
++#define tileTMEM(gpuTile) gTMEM[NonUniformResourceIndex((gpuTile).textureIndex)]
++#define TILE_TEXTURE_SWITCH(gpuTile, TEXTURE_CALL) return TEXTURE_CALL(gTextures[NonUniformResourceIndex((gpuTile).textureIndex)]);
++#endif
++
++// The GPU tile of the draw's tile tileIndex (0 to 7).
++GPUTile drawGPUTile(uint rdpTileIndex, uint tileIndex) {
++    GPUTile gpuTile = GPUTiles[rdpTileIndex + tileIndex];
++#ifdef PER_DRAW_TEXTURES
++    gpuTile.drawSlot = tileIndex;
++#endif
++    return gpuTile;
++}
++
++float4 loadTileTexture(const GPUTile gpuTile, int3 texelMip) {
++#define TEXTURE_CALL(texture) texture.Load(texelMip)
++    TILE_TEXTURE_SWITCH(gpuTile, TEXTURE_CALL)
++#undef TEXTURE_CALL
++}
++
++#ifdef PER_DRAW_TEXTURES
++// A texel for each tap of a filter (only the first without filtering), in one switch over the slots.
++#define LOAD_TILE_TEXELS(texture) \
++    samples[0] = texture.Load(int3(texels[0], mipLevel)); \
++    if (filtering) { \
++        samples[1] = texture.Load(int3(texels[1], mipLevel)); \
++        samples[2] = texture.Load(int3(texels[2], mipLevel)); \
++        samples[3] = texture.Load(int3(texels[3], mipLevel)); \
++    } \
++    break;
++
++void loadTileTexels(const GPUTile gpuTile, int2 texels[4], uint mipLevel, bool filtering, inout float4 samples[4]) {
++    switch (gpuTile.drawSlot) {
++    case 0: LOAD_TILE_TEXELS(gTileTexture0)
++    case 1: LOAD_TILE_TEXELS(gTileTexture1)
++    case 2: LOAD_TILE_TEXELS(gTileTexture2)
++    case 3: LOAD_TILE_TEXELS(gTileTexture3)
++    case 4: LOAD_TILE_TEXELS(gTileTexture4)
++    case 5: LOAD_TILE_TEXELS(gTileTexture5)
++    case 6: LOAD_TILE_TEXELS(gTileTexture6)
++    default: LOAD_TILE_TEXELS(gTileTexture7)
++    }
++}
++#undef LOAD_TILE_TEXELS
++#endif
++
+ void computeLOD(OtherMode otherMode, uint rdpTileCount, float2 primLOD, float resLodScale, float2 ddxUV, float2 ddyUV, inout int tileIndex0, inout int tileIndex1, out float lodFraction) {
+     const bool usesLOD = (otherMode.textLOD() == G_TL_LOD);
+     if (usesLOD) {
+@@ -71,26 +153,8 @@ void computeLOD(OtherMode otherMode, uint rdpTileCount, float2 primLOD, float re
+     }
+ }
+ 
+-int generatedMipTexel(int texel, int dimension, uint mode) {
+-    // Explicit scalar calls avoid loop-carried dependencies in the shipping
+-    // re-spirv specialized shader graph (the dynamic shader also uses this).
+-    if (mode & G_TX_CLAMP) return clamp(texel, 0, dimension - 1);
+-    if (mode & G_TX_MIRROR) {
+-        int p = modulo(texel, 2 * dimension);
+-        return p < dimension ? p : 2 * dimension - 1 - p;
+-    }
+-    return modulo(texel, dimension);
+-}
+-
+-float4 clampWrapMirrorSample(const RDPTile rdpTile, const GPUTile gpuTile, float2 tcScale, int2 texelInt, uint tlut, bool gpuTileUsesTMEM, uint mipLevel) {
+-    if (gpuTileFlagGeneratedMipmaps(gpuTile.flags) && mipLevel > 0) {
+-        // Eligible generated chains cover the whole image. Actual dimensions also
+-        // handle the short axis reaching 1 before the long axis, and NPOT levels.
+-        int2 dims = max(int2(gpuTile.textureDimensions.xy) >> mipLevel, int2(1, 1));
+-        texelInt.x = generatedMipTexel(texelInt.x, dims.x, rdpTile.cms);
+-        texelInt.y = generatedMipTexel(texelInt.y, dims.y, rdpTile.cmt);
+-        return gTextures[NonUniformResourceIndex(gpuTile.textureIndex)].Load(int3(texelInt, mipLevel));
+-    }
++// The texel a tap reads, with the tile's clamp, wrap and mirror applied.
++int2 clampWrapMirrorTexel(const RDPTile rdpTile, const GPUTile gpuTile, float2 tcScale, int2 texelInt) {
+     if (rdpTile.cms & G_TX_CLAMP) {
+         texelInt.x = clamp(texelInt.x, 0, (round(tcScale.x * rdpTile.lrs) / 4) - (round(tcScale.x * rdpTile.uls) / 4) + round(tcScale.x - 1.0f));
+     }
+@@ -116,24 +180,45 @@ float4 clampWrapMirrorSample(const RDPTile rdpTile, const GPUTile gpuTile, float
+     }
+     
+     // Allows selection of only particular columns or rows as defined by the tile.
+-    texelInt = (texelInt & gpuTile.texelMask) + gpuTile.texelShift;
++    return (texelInt & gpuTile.texelMask) + gpuTile.texelShift;
++}
++
++float4 clampWrapMirrorSample(const RDPTile rdpTile, const GPUTile gpuTile, float2 tcScale, int2 texelInt, uint tlut, bool gpuTileUsesTMEM, uint mipLevel) {
++    texelInt = clampWrapMirrorTexel(rdpTile, gpuTile, tcScale, texelInt);
+ 
+     // Check if tile requires TMEM decoding and sample using dynamic decoding.
+     if (gpuTileUsesTMEM) {
+-        return sampleTMEM(texelInt, rdpTile.siz, rdpTile.fmt, rdpTile.address, rdpTile.stride, tlut, rdpTile.palette, gTMEM[NonUniformResourceIndex(gpuTile.textureIndex)]);
++        return sampleTMEM(texelInt, rdpTile.siz, rdpTile.fmt, rdpTile.address, rdpTile.stride, tlut, rdpTile.palette, tileTMEM(gpuTile));
+     }
+     // Sample the color version directly.
+     else {
+-        return gTextures[NonUniformResourceIndex(gpuTile.textureIndex)].Load(int3(texelInt, mipLevel));
++        return loadTileTexture(gpuTile, int3(texelInt, mipLevel));
+     }
+ }
+ 
+ static const float LowPrecision = 128.0f;
+ 
++#ifdef WEBGPU
++// WebGPU guarantees only 16 samplers in a stage, and nearest ones for every address mode would be 9 more. A nearest
++// sample at a texel's centre is that texel, so it is loaded, with the sampler's address mode applied to the texel coordinate first: outside
++// the switch over the draw's texture slots, which then holds only the load, rather than this once per slot.
++int2 nativeSamplerTexel(uint nativeSampler, int2 texelBaseInt, float2 textureSize) {
++    const int2 size = int2(textureSize);
++    const uint addressModeU = (nativeSampler - 1) / 3;
++    const uint addressModeV = (nativeSampler - 1) % 3;
++    int2 texel = texelBaseInt;
++    int2 period = int2(addressModeU == 1 ? 2 : 1, addressModeV == 1 ? 2 : 1) * size;
++    int2 wrapped = ((texel % period) + period) % period;
++    int2 mirrored = select(wrapped < size, wrapped, period - 1 - wrapped);
++    texel.x = (addressModeU == 2) ? clamp(texel.x, 0, size.x - 1) : mirrored.x;
++    texel.y = (addressModeV == 2) ? clamp(texel.y, 0, size.y - 1) : mirrored.y;
++    return texel;
++}
++#else
+ float4 sampleTextureNative(Texture2D texture, uint nativeSampler, int2 texelBaseInt, float2 textureSize) {
+     // Transform to native coordinate. Half pixel offset is required to reach the desired texel.
+     float2 nativeUVCoord = (float2(texelBaseInt) + 0.5f) / textureSize;
+-            
++
+     // Choose the native sampler that was determined to be compatible.
+     switch (nativeSampler) {
+         case NATIVE_SAMPLER_WRAP_WRAP:
+@@ -157,13 +242,62 @@ float4 sampleTextureNative(Texture2D texture, uint nativeSampler, int2 texelBase
+             return texture.SampleLevel(gNearestClampClampSampler, nativeUVCoord, 0.0f);
+     }
+ }
++#endif
++
++#ifndef PER_DRAW_TEXTURES
++float4 sampleTextureGrad(Texture2D texture, uint nativeSampler, float2 nativeUVCoord, float2 ddxUVNorm, float2 ddyUVNorm) {
++    // Choose the native sampler that was determined to be compatible.
++    switch (nativeSampler) {
++        case NATIVE_SAMPLER_WRAP_WRAP:
++            return texture.SampleGrad(gLinearWrapWrapSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
++        case NATIVE_SAMPLER_WRAP_MIRROR:
++            return texture.SampleGrad(gLinearWrapMirrorSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
++        case NATIVE_SAMPLER_WRAP_CLAMP:
++            return texture.SampleGrad(gLinearWrapClampSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
++        case NATIVE_SAMPLER_MIRROR_WRAP:
++            return texture.SampleGrad(gLinearMirrorWrapSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
++        case NATIVE_SAMPLER_MIRROR_MIRROR:
++            return texture.SampleGrad(gLinearMirrorMirrorSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
++        case NATIVE_SAMPLER_MIRROR_CLAMP:
++            return texture.SampleGrad(gLinearMirrorClampSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
++        case NATIVE_SAMPLER_CLAMP_WRAP:
++            return texture.SampleGrad(gLinearClampWrapSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
++        case NATIVE_SAMPLER_CLAMP_MIRROR:
++            return texture.SampleGrad(gLinearClampMirrorSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
++        case NATIVE_SAMPLER_CLAMP_CLAMP:
++        default:
++            return texture.SampleGrad(gLinearClampClampSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
++    }
++}
++#endif
++
++float4 sampleTileTextureNative(const GPUTile gpuTile, uint nativeSampler, int2 texelBaseInt) {
++#ifdef WEBGPU
++    return loadTileTexture(gpuTile, int3(nativeSamplerTexel(nativeSampler, texelBaseInt, gpuTile.textureDimensions.xy), 0));
++#else
++#define TEXTURE_CALL(texture) sampleTextureNative(texture, nativeSampler, texelBaseInt, gpuTile.textureDimensions.xy)
++    TILE_TEXTURE_SWITCH(gpuTile, TEXTURE_CALL)
++#undef TEXTURE_CALL
++#endif
++}
++
++float4 sampleTileTextureGrad(const GPUTile gpuTile, uint nativeSampler, float2 nativeUVCoord, float2 ddxUVNorm, float2 ddyUVNorm) {
++#ifdef PER_DRAW_TEXTURES
++    // The renderer bound the slot's sampler for nativeSampler (FramebufferRenderer::updateDrawTextureSets).
++#define TEXTURE_SAMPLER_CALL(texture, sampler) texture.SampleGrad(sampler, nativeUVCoord, ddxUVNorm, ddyUVNorm)
++    TILE_TEXTURE_SAMPLER_SWITCH(gpuTile, TEXTURE_SAMPLER_CALL)
++#undef TEXTURE_SAMPLER_CALL
++#else
++#define TEXTURE_CALL(texture) sampleTextureGrad(texture, nativeSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm)
++    TILE_TEXTURE_SWITCH(gpuTile, TEXTURE_CALL)
++#undef TEXTURE_CALL
++#endif
++}
+ 
+ float4 sampleTextureLevel(const RDPTile rdpTile, const GPUTile gpuTile, bool filterBilerp, bool filterAverage, bool linearFiltering, float2 uvCoord, uint tlut, bool canDecodeTMEM, uint mipLevel, bool usesHDR) {
+     float2 tcScale = gpuTile.tcScale;
+     float mipScale = float(1U << mipLevel);
+-    if (gpuTileFlagGeneratedMipmaps(gpuTile.flags))
+-        uvCoord *= max(floor(gpuTile.textureDimensions.xy / mipScale), float2(1,1)) / gpuTile.textureDimensions.xy;
+-    else uvCoord /= mipScale;
++    uvCoord /= mipScale;
+     tcScale /= mipScale;
+     
+     int2 texelBaseInt = floor(uvCoord);
+@@ -171,6 +305,40 @@ float4 sampleTextureLevel(const RDPTile rdpTile, const GPUTile gpuTile, bool fil
+     float4 samples[4];
+     const uint nativeSampler = rdpTile.nativeSampler;
+     bool gpuTileUsesTMEM = canDecodeTMEM && gpuTileFlagRawTMEM(gpuTile.flags);
++#if defined(WEBGPU) && defined(PER_DRAW_TEXTURES) && !USE_FOR_LOOPS
++    // Every tap's texel is found first, by the native sampler's address mode or by the tile's clamp, wrap and mirror,
++    // and the taps are then loaded in one switch over the draw's texture slots (loadTileTexels()). A switch for each
++    // tap and for each way of finding its texel left a pixel shader whose slot is picked per pixel (mip LOD) with 32
++    // switches of 8 loads: one of GoldenEye's, 224 KB of WGSL, is 185 KB this way with half the loads, and builds in
++    // about 60% of the time in Firefox 158 and Chrome 155 (RTX 2070). GoldenEye's prebuilt list is 16.3 MB of WGSL
++    // instead of 19.0, and Firefox, which builds a section one shader at a time while the game waits, waited 8.7-9.4 s
++    // for its boot and 14.0-21.7 s for Dam against 10.4-11.6 and 17.7-23.3 (three runs each, interleaved). The
++    // ubershader reads its taps in a loop (USE_FOR_LOOPS), a load site already, and keeps it.
++    const bool nativeAddress = (nativeSampler != NATIVE_SAMPLER_NONE) && !gpuTileUsesTMEM;
++    int2 texels[4];
++    [unroll]
++    for (int i = 0; i < 4; i++) {
++        const int2 texelInt = texelBaseInt + int2(i >> 1, i & 1);
++        if (nativeAddress) {
++            texels[i] = nativeSamplerTexel(nativeSampler, texelInt, gpuTile.textureDimensions.xy);
++        }
++        else {
++            texels[i] = clampWrapMirrorTexel(rdpTile, gpuTile, tcScale, texelInt);
++        }
++    }
++
++    if (gpuTileUsesTMEM) {
++        samples[0] = sampleTMEM(texels[0], rdpTile.siz, rdpTile.fmt, rdpTile.address, rdpTile.stride, tlut, rdpTile.palette, tileTMEM(gpuTile));
++        if (filtering) {
++            samples[1] = sampleTMEM(texels[1], rdpTile.siz, rdpTile.fmt, rdpTile.address, rdpTile.stride, tlut, rdpTile.palette, tileTMEM(gpuTile));
++            samples[2] = sampleTMEM(texels[2], rdpTile.siz, rdpTile.fmt, rdpTile.address, rdpTile.stride, tlut, rdpTile.palette, tileTMEM(gpuTile));
++            samples[3] = sampleTMEM(texels[3], rdpTile.siz, rdpTile.fmt, rdpTile.address, rdpTile.stride, tlut, rdpTile.palette, tileTMEM(gpuTile));
++        }
++    }
++    else {
++        loadTileTexels(gpuTile, texels, nativeAddress ? 0 : mipLevel, filtering, samples);
++    }
++#else
+     if ((nativeSampler == NATIVE_SAMPLER_NONE) || gpuTileUsesTMEM) {
+ #if USE_FOR_LOOPS
+         int numSamples = select_uint(filtering, 4, 1);
+@@ -189,23 +357,23 @@ float4 sampleTextureLevel(const RDPTile rdpTile, const GPUTile gpuTile, bool fil
+ #endif
+     }
+     else {
+-        Texture2D texture = gTextures[NonUniformResourceIndex(gpuTile.textureIndex)];
+ #if USE_FOR_LOOPS
+         int numSamples = select_uint(filtering, 4, 1);
+         [unroll]
+         for (int i = 0; i < numSamples; i++) {
+-            samples[i] = sampleTextureNative(texture, nativeSampler, texelBaseInt + int2(i >> 1, i & 1), gpuTile.textureDimensions.xy);
++            samples[i] = sampleTileTextureNative(gpuTile, nativeSampler, texelBaseInt + int2(i >> 1, i & 1));
+         }
+ #else
+-        samples[0] = sampleTextureNative(texture, nativeSampler, texelBaseInt, gpuTile.textureDimensions.xy);
++        samples[0] = sampleTileTextureNative(gpuTile, nativeSampler, texelBaseInt);
+         
+         if (filtering) {
+-            samples[1] = sampleTextureNative(texture, nativeSampler, texelBaseInt + int2(0, 1), gpuTile.textureDimensions.xy);
+-            samples[2] = sampleTextureNative(texture, nativeSampler, texelBaseInt + int2(1, 0), gpuTile.textureDimensions.xy);
+-            samples[3] = sampleTextureNative(texture, nativeSampler, texelBaseInt + int2(1, 1), gpuTile.textureDimensions.xy);
++            samples[1] = sampleTileTextureNative(gpuTile, nativeSampler, texelBaseInt + int2(0, 1));
++            samples[2] = sampleTileTextureNative(gpuTile, nativeSampler, texelBaseInt + int2(1, 0));
++            samples[3] = sampleTileTextureNative(gpuTile, nativeSampler, texelBaseInt + int2(1, 1));
+         }
+ #endif
+     }
++#endif
+     
+     float4 sample00 = samples[0];
+     if (filtering) {
+@@ -235,7 +403,7 @@ float4 sampleTextureLevel(const RDPTile rdpTile, const GPUTile gpuTile, bool fil
+     }
+ }
+ 
+-float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputUV, float2 ddxUV, float2 ddyUV, const RDPTile rdpTile, const GPUTile gpuTile, bool nextPixelBug, float mipLODBias, bool allowGeneratedMips = false) {
++float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputUV, float2 ddxUV, float2 ddyUV, const RDPTile rdpTile, const GPUTile gpuTile, bool nextPixelBug) {
+     const bool texturePerspective = (otherMode.textPersp() == G_TP_PERSP);
+     const bool applyCorrection = (!texturePerspective && !renderFlagRect(renderFlags));
+ 
+@@ -284,23 +452,7 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
+     const bool canDecodeTMEM = renderFlagCanDecodeTMEM(renderFlags);
+     const bool usesHDR = renderFlagUsesHDR(renderFlags);
+     const uint nativeSampler = rdpTile.nativeSampler;
+-    const bool generated = gpuTileFlagGeneratedMipmaps(gpuTile.flags);
+-    float2 originalDimensions = gpuTile.textureDimensions.xy / gpuTile.tcScale;
+-    float2 tileDimensions = (float2(rdpTile.lrs-rdpTile.uls, rdpTile.lrt-rdpTile.ult) / 4.0f) + 1.0f;
+-    bool wholeS = (rdpTile.cms & G_TX_CLAMP) ? abs(tileDimensions.x-originalDimensions.x)<0.01f : abs(rdpTile.masks-originalDimensions.x)<0.01f;
+-    bool wholeT = (rdpTile.cmt & G_TX_CLAMP) ? abs(tileDimensions.y-originalDimensions.y)<0.01f : abs(rdpTile.maskt-originalDimensions.y)<0.01f;
+-    // Coverage-sensitive cutouts and translucent/decal passes intentionally stay
+-    // on level zero. Authored DDS chains retain their previous independent policy.
+-    const bool eligible = allowGeneratedMips && !renderFlagRect(renderFlags) && texturePerspective
+-        && otherMode.zCmp() && otherMode.zUpd() && otherMode.zMode() == ZMODE_OPA
+-        && !otherMode.forceBlend() && !otherMode.cvgXAlpha() && otherMode.alphaCompare() == G_AC_NONE
+-        && !gpuTileFlagRawTMEM(gpuTile.flags) && !gpuTileFlagFromCopy(gpuTile.flags)
+-        && wholeS && wholeT;
+-    const bool flagHasMipmaps = gpuTileFlagHasMipmaps(gpuTile.flags) && (!generated || eligible);
+-    if (generated && flagHasMipmaps) {
+-        ddxUV *= float2(rdpTile.shifts, rdpTile.shiftt) * perspCorrectionMod;
+-        ddyUV *= float2(rdpTile.shifts, rdpTile.shiftt) * perspCorrectionMod;
+-    }
++    const bool flagHasMipmaps = gpuTileFlagHasMipmaps(gpuTile.flags);
+     uint numRDPSamples = 0;
+     uint RDPMipLevels[2];
+     RDPMipLevels[0] = 0;
+@@ -309,50 +461,25 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
+ 
+     // Determine the RDP sample count and mip levels.
+     if (flagHasMipmaps) {
+-        // Retrieve the dimensions of the texture for either type of sampler.
+-        Texture2D texture = gTextures[NonUniformResourceIndex(gpuTile.textureIndex)];
+         if (nativeSampler == NATIVE_SAMPLER_NONE) {
+             float2 ddxUVScaled = ddxUV * gpuTile.tcScale;
+             float2 ddyUVScaled = ddyUV * gpuTile.tcScale;
+             float ddMax = max(dot(ddxUVScaled, ddxUVScaled), dot(ddyUVScaled, ddyUVScaled));
++            float mipBias = -0.25f;
++            mip = 0.5 * log2(ddMax) + mipBias;
+             float maxMip = float(gpuTile.textureDimensions.z - 1);
+-            mip = clamp(0.5 * log2(ddMax) + mipLODBias, 0.0f, maxMip);
+-            RDPMipLevels[0] = uint(floor(mip));
+-            RDPMipLevels[1] = min(RDPMipLevels[0] + 1U, uint(maxMip));
++            RDPMipLevels[0] = min(floor(mip), maxMip);
++            RDPMipLevels[1] = min(floor(mip) + 1, maxMip);
+             numRDPSamples = 2;
+         }
+         else {
+             // Must normalize the texture coordinate and the derivatives.
+             float2 nativeUVCoord = uvCoord / gpuTile.textureDimensions.xy;
+             float2 originalSize = gpuTile.textureDimensions.xy / gpuTile.tcScale;
+-            // A 2^bias gradient scale adds bias to the selected mip level.
+-            // Scale both axes equally to preserve the anisotropic footprint ratio.
+-            const float lodGradientScale = exp2(mipLODBias);
+-            float2 ddxUVNorm = (ddxUV / originalSize) * lodGradientScale;
+-            float2 ddyUVNorm = (ddyUV / originalSize) * lodGradientScale;
++            float2 ddxUVNorm = ddxUV / originalSize;
++            float2 ddyUVNorm = ddyUV / originalSize;
+             
+-            // Choose the native sampler that was determined to be compatible.
+-            switch (nativeSampler) {
+-                case NATIVE_SAMPLER_WRAP_WRAP:
+-                    return texture.SampleGrad(gLinearWrapWrapSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
+-                case NATIVE_SAMPLER_WRAP_MIRROR:
+-                    return texture.SampleGrad(gLinearWrapMirrorSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
+-                case NATIVE_SAMPLER_WRAP_CLAMP:
+-                    return texture.SampleGrad(gLinearWrapClampSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
+-                case NATIVE_SAMPLER_MIRROR_WRAP:
+-                    return texture.SampleGrad(gLinearMirrorWrapSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
+-                case NATIVE_SAMPLER_MIRROR_MIRROR:
+-                    return texture.SampleGrad(gLinearMirrorMirrorSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
+-                case NATIVE_SAMPLER_MIRROR_CLAMP:
+-                    return texture.SampleGrad(gLinearMirrorClampSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
+-                case NATIVE_SAMPLER_CLAMP_WRAP:
+-                    return texture.SampleGrad(gLinearClampWrapSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
+-                case NATIVE_SAMPLER_CLAMP_MIRROR:
+-                    return texture.SampleGrad(gLinearClampMirrorSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
+-                case NATIVE_SAMPLER_CLAMP_CLAMP:
+-                default:
+-                    return texture.SampleGrad(gLinearClampClampSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
+-            }
++            return sampleTileTextureGrad(gpuTile, nativeSampler, nativeUVCoord, ddxUVNorm, ddyUVNorm);
+         }
+     }
+     else {
+@@ -395,4 +522,4 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
+     }
+     
+     return textureColor;
+-}
++}
+\ No newline at end of file
+diff --git a/src/shared/rt64_raster_params.h b/src/shared/rt64_raster_params.h
+index ac6431c..b1b3768 100644
+--- a/src/shared/rt64_raster_params.h
++++ b/src/shared/rt64_raster_params.h
+@@ -17,6 +17,9 @@ namespace interop {
+         float2 screenScale;
+         float2 screenOffset;
+     };
++#ifdef HLSL_CPU
++    static_assert(sizeof(RasterParams) == 32, "RasterParams must keep the layout WGSL gives it.");
++#endif
+ #ifdef HLSL_CPU
+ };
+ #endif

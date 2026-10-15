@@ -60,6 +60,28 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(IOS)
     set(BUILD_TESTING OFF CACHE BOOL "No test harness in the sideload app" FORCE)
 endif()
+# With Emscripten (emcmake cmake, scripts/build_web.sh), the game builds as a page for a browser, DKR-R.html, through
+# lib/N64Recomp-browser/frontend: RT64 on WebGPU, the US v1.0 payload alone, and none of what a page can't run: the
+# SDL3 input host and the mod worker (processes of their own), online play's WebRTC transport, enhanced water's
+# shaders, the tests.
+if(EMSCRIPTEN)
+    set(BUILD_TESTING OFF CACHE BOOL "No tests on a page" FORCE)
+    set(DKR_RUNTIME_BUILD_RT64 ON CACHE BOOL "" FORCE)
+    set(DKR_RUNTIME_BUILD_SDL3_INPUT_HOST OFF CACHE BOOL "" FORCE)
+    set(DKR_NETPLAY_WEBRTC OFF CACHE BOOL "" FORCE)
+    set(DKR_ENHANCED_WATER OFF CACHE BOOL "" FORCE)
+    # Threads are pthreads (SharedArrayBuffer), and the runtime ends a game thread by throwing. -msimd128 is wasm SIMD,
+    # which every browser with WebGPU has; -mtail-call makes the recompiled code's tail calls return_calls. With
+    # -msimd128 xxHash would take its NEON path through Emscripten's arm_neon.h, which doesn't compile in C++ there.
+    add_compile_options(-pthread -fwasm-exceptions -msimd128 -mtail-call "-DXXH_HAS_INCLUDE(x)=0" -sUSE_SDL=2)
+    include_directories(SYSTEM "${EMSCRIPTEN_SYSROOT}/include/SDL2")
+    add_link_options(-pthread -fwasm-exceptions -mtail-call)
+    # ccache when it is on PATH, for shorter builds; before rt64 and the runtime are added.
+    include("${CMAKE_CURRENT_LIST_DIR}/../lib/N64Recomp-browser/frontend/build_speed.cmake")
+    # The shaders the page specializes at build time and builds before the game draws with them (web/rt64_shaders.txt
+    # says how it was recorded); before rt64 is added.
+    set(RT64_PREBUILT_SHADER_LIST "${CMAKE_CURRENT_LIST_DIR}/../web/rt64_shaders.txt" CACHE FILEPATH "" FORCE)
+endif()
 include(CTest)
 include(cmake/ProjectTests.cmake)
 
@@ -128,7 +150,7 @@ option(DKR_NETPLAY_WEBRTC "Build the optional five-character Quick Join transpor
 include(cmake/DependencyPreflight.cmake)
 
 if(DKR_RUNTIME_BUILD_GENERATED)
-    if(DKR_GENERATED_SOURCE_V80 STREQUAL "")
+    if(DKR_GENERATED_SOURCE_V80 STREQUAL "" AND NOT EMSCRIPTEN)
         message(FATAL_ERROR
             "DKR_GENERATED_SOURCE_V80 must name the generated US Rev A/v1.1 "
             "CPU source directory. Both revision payloads are linked into the "
@@ -138,7 +160,7 @@ if(DKR_RUNTIME_BUILD_GENERATED)
         "${DKR_GENERATED_SOURCE_V77}" ABSOLUTE)
     get_filename_component(DKR_GENERATED_SOURCE_V80_ABSOLUTE
         "${DKR_GENERATED_SOURCE_V80}" ABSOLUTE)
-    if(DKR_GENERATED_SOURCE_V77_ABSOLUTE STREQUAL
+    if(NOT DKR_GENERATED_SOURCE_V80 STREQUAL "" AND DKR_GENERATED_SOURCE_V77_ABSOLUTE STREQUAL
        DKR_GENERATED_SOURCE_V80_ABSOLUTE)
         message(FATAL_ERROR
             "The v1.0 and Rev A CPU payloads must come from different generated "
@@ -474,8 +496,11 @@ if(DKR_RUNTIME_BUILD_RT64)
     else()
         set(DKR_VULKAN_MEASURE_SOURCE "${DKR_RT64_SOURCE}")
     endif()
-    dkr_stage_patch(plume "${DKR_VULKAN_MEASURE_SOURCE}" performance-vulkan-measurements
-        "${DKRPORT_ROOT}/patches/performance/vulkan-measurements.patch" src/contrib/plume/plume_vulkan.cpp)
+    # A page's plume has no Vulkan backend to measure (it draws through WebGPU).
+    if(NOT EMSCRIPTEN)
+        dkr_stage_patch(plume "${DKR_VULKAN_MEASURE_SOURCE}" performance-vulkan-measurements
+            "${DKRPORT_ROOT}/patches/performance/vulkan-measurements.patch" src/contrib/plume/plume_vulkan.cpp)
+    endif()
     if(ANDROID)
         dkr_stage_patch(plume "${CMAKE_BINARY_DIR}/generated/performance-vulkan-measurements" android-mapped-memory
             "${DKRPORT_ROOT}/patches/android/vulkan-mapped-memory.patch" src/contrib/plume/plume_vulkan.cpp)
@@ -637,10 +662,12 @@ if(DKR_RUNTIME_BUILD_GENERATED)
             RUNTIME_OUTPUT_DIRECTORY_${config_upper}
                 "${CMAKE_BINARY_DIR}/bin/${config}/libexec/dkr-r")
     endforeach()
-    set(DKR_V80_SYMBOL_MAP
-        "${CMAKE_BINARY_DIR}/generated/dkr_v80_symbol_map.hpp")
-    include("${CMAKE_CURRENT_LIST_DIR}/cmake/RevisionSymbolMap.cmake")
-    dkr_generate_revision_symbol_map("${DKR_GENERATED_SOURCE_V80}" "dkr_v80_" "${DKR_V80_SYMBOL_MAP}")
+    if(NOT DKR_GENERATED_SOURCE_V80 STREQUAL "")
+        set(DKR_V80_SYMBOL_MAP
+            "${CMAKE_BINARY_DIR}/generated/dkr_v80_symbol_map.hpp")
+        include("${CMAKE_CURRENT_LIST_DIR}/cmake/RevisionSymbolMap.cmake")
+        dkr_generate_revision_symbol_map("${DKR_GENERATED_SOURCE_V80}" "dkr_v80_" "${DKR_V80_SYMBOL_MAP}")
+    endif()
 
     # Each ROM revision contributes only its generated CPU payload. The
     # frontend, renderer, audio, input, netplay and settings runtime are linked
@@ -708,6 +735,11 @@ if(DKR_RUNTIME_BUILD_GENERATED)
             "${DKR_MODERN_RUNTIME_SOURCE}/librecomp/include"
             "${SOURCE_DIR}"
         )
+        if(EMSCRIPTEN)
+            # WebAssembly checks a call's signature when it links and turns a call to an undeclared function into a
+            # trap, so the recompiled code may not call one. N64Recomp's funcs.h declares everything its code calls.
+            target_compile_options(${TARGET_NAME} PRIVATE -Werror=implicit-function-declaration)
+        endif()
         if(MSVC)
             target_compile_options(${TARGET_NAME} PRIVATE
                 /FS
@@ -728,7 +760,7 @@ if(DKR_RUNTIME_BUILD_GENERATED)
                 -fno-strict-aliasing
                 -Wno-unused-but-set-variable
                 -Wno-unused-variable
-                -Wno-implicit-function-declaration
+                $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:-Wno-implicit-function-declaration>
             )
             if(NOT FORCE_INCLUDE STREQUAL "")
                 target_compile_options(${TARGET_NAME} PRIVATE
@@ -743,10 +775,13 @@ if(DKR_RUNTIME_BUILD_GENERATED)
     dkr_add_recompiled_payload(
         DKRRecompiledFuncsV77 77 "${DKR_GENERATED_SOURCE_V77}"
         "${CMAKE_CURRENT_LIST_DIR}/src/game/game_payload_v77.cpp")
-    dkr_add_recompiled_payload(
-        DKRRecompiledFuncsV80 80 "${DKR_GENERATED_SOURCE_V80}"
-        "${CMAKE_CURRENT_LIST_DIR}/src/game/game_payload_v80.cpp"
-        "${DKR_V80_SYMBOL_MAP}")
+    # A page has US v1.0 alone (scripts/build_web.sh): Rev A would be a second copy of the game's code in the wasm.
+    if(NOT DKR_GENERATED_SOURCE_V80 STREQUAL "")
+        dkr_add_recompiled_payload(
+            DKRRecompiledFuncsV80 80 "${DKR_GENERATED_SOURCE_V80}"
+            "${CMAKE_CURRENT_LIST_DIR}/src/game/game_payload_v80.cpp"
+            "${DKR_V80_SYMBOL_MAP}")
+    endif()
 endif()
 
 if(DKR_RUNTIME_BUILD_GENERATED)
@@ -903,12 +938,17 @@ if(DKR_RUNTIME_BUILD_GENERATED)
     # both platforms on the same single-runtime link graph.
     target_link_libraries(DKRPortGame PRIVATE
         DKRRecompiledFuncsV77
-        DKRRecompiledFuncsV80
+        $<TARGET_NAME_IF_EXISTS:DKRRecompiledFuncsV80>
         ultramodern
         librecomp)
+    if(NOT TARGET DKRRecompiledFuncsV80)
+        target_compile_definitions(DKRPortGame PRIVATE DKR_RUNTIME_HAS_V80=0)
+    endif()
     target_link_libraries(DKRPortGame PRIVATE DKRNetplayCore)
     target_link_libraries(DKRPortGame PRIVATE DKRLegacyModLaunch DKRLegacyGuestIO)
-    add_dependencies(DKRPortGame DKRLegacyModWorker)
+    if(NOT EMSCRIPTEN)
+        add_dependencies(DKRPortGame DKRLegacyModWorker)
+    endif()
     if(MSVC)
         target_compile_options(DKRPortGame PRIVATE /FS)
     endif()
@@ -950,6 +990,8 @@ if(DKR_RUNTIME_BUILD_GENERATED)
             )
         elseif(IOS)
             dkr_ios_finish(DKRPortGame)
+        elseif(EMSCRIPTEN)
+            # Emscripten's own SDL2 (-sUSE_SDL=2, above), linked by the page's frontend.
         else()
             find_package(SDL2 REQUIRED)
             target_include_directories(DKRPortGame PRIVATE ${SDL2_INCLUDE_DIRS})
@@ -966,6 +1008,7 @@ if(DKR_RUNTIME_BUILD_GENERATED)
                 VERBATIM
             )
         endif()
+        if(NOT EMSCRIPTEN)
         add_custom_command(TARGET DKRPortGame POST_BUILD
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${CMAKE_BINARY_DIR}/dkr-release.json"
@@ -1002,6 +1045,16 @@ if(DKR_RUNTIME_BUILD_GENERATED)
             COMMENT "Staging the DKR-R launcher, graphics and controller assets"
             VERBATIM
         )
+        endif()
+    endif()
+    if(EMSCRIPTEN)
+        # The page (lib/N64Recomp-browser/frontend). No ROM: the player picks theirs on the page, and it stays in the
+        # browser. SDL's controller mappings are the one asset the game reads; the rest are the launcher's.
+        add_subdirectory("${DKRPORT_ROOT}/lib/N64Recomp-browser/frontend" "${CMAKE_BINARY_DIR}/web_frontend")
+        n64recomp_browser_frontend_page(DKRPortGame)
+        target_sources(DKRPortGame PRIVATE src/game/web_page.cpp src/game/web_shims.cpp)
+        target_link_options(DKRPortGame PRIVATE
+            "SHELL:--preload-file ${CMAKE_CURRENT_LIST_DIR}/../assets/controllers/gamecontrollerdb.txt@/assets/controllers/gamecontrollerdb.txt")
     endif()
     if(WIN32)
         target_link_libraries(DKRPortGame PRIVATE user32 shell32 dbghelp bcrypt dxgi)
@@ -1163,7 +1216,7 @@ if(TARGET DKRPortGame AND (DKR_EXPERIMENTAL_RENDER_QUALIFICATION OR DKR_EXPERIME
         "${CMAKE_CURRENT_LIST_DIR}/src/game/netplay/experimental_checkpoint_hash.cpp")
     target_include_directories(rt64 INTERFACE "${DKR_MODERN_RUNTIME_SOURCE}/thirdparty")
 endif()
-if(TARGET DKRPortGame AND DKR_RUNTIME_BUILD_RT64 AND NOT APPLE)
+if(TARGET DKRPortGame AND DKR_RUNTIME_BUILD_RT64 AND NOT APPLE AND NOT EMSCRIPTEN)
     set(DKR_PRESENTATION_PROBE_SOURCES ${DKR_GAME_SOURCES})
     list(REMOVE_ITEM DKR_PRESENTATION_PROBE_SOURCES src/game/game_main.cpp)
     add_executable(DKRExperimentalGpuProbe EXCLUDE_FROM_ALL

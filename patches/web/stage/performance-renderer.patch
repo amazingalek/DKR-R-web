@@ -1,0 +1,66 @@
+diff --git a/src/hle/rt64_application.cpp b/src/hle/rt64_application.cpp
+index 839b243..826f946 100644
+--- a/src/hle/rt64_application.cpp
++++ b/src/hle/rt64_application.cpp
+@@ -352,6 +352,14 @@ namespace RT64 {
+         }
+ 
+         swapChain = presentGraphicsWorker->commandQueue->createSwapChain(swapChainDesc);
++#ifdef __ANDROID__
++        // Validate presentation before compiling pipelines or starting audio.
++        // A surface rejected by the driver must not become an audio-only game.
++        if (!swapChain || !swapChain->resize()) {
++            fprintf(stderr, "[Android] Vulkan presentation preflight failed. Export startup logs from About.\n");
++            return SetupResult::GraphicsDeviceNotFound;
++        }
++#endif
+ 
+         // Before configuring multisampling, make sure the device actually supports it for the formats we'll use. If it doesn't, turn off antialiasing in the configuration.
+         const RenderSampleCounts colorSampleCounts = device->getSampleCountsSupported(RenderTarget::colorBufferFormat(usesHDR));
+@@ -370,15 +378,23 @@ namespace RT64 {
+         // Create the shader caches.
+         // Estimate the amount of shader compiler threads by trying to use about half of the system's available threads.
+         // We need the ubershader pipelines done as soon as possible, so we use a different thread count that demands more of the system.
++#ifdef __ANDROID__
++        constexpr bool mobileBudget = true;
++#else
++        constexpr bool mobileBudget = false;
++#endif
++        const auto workerBudget = dkr::runtime::render_resources::workers(threadsAvailable, mobileBudget);
+ #   if defined(RT64_WGSL)
+         // On WebGPU the thread only waits while the browser builds the pipeline on threads of its own, as many at once as
+         // are asked for, and those compete with the page's. Six at once took about 9 cores and halved the frame rate;
+         // one at a time kept 50-60 frames a second (Chrome, 12 threads).
+         const uint32_t rasterShaderThreads = 1;
+ #   else
+-        const uint32_t rasterShaderThreads = std::max(threadsAvailable / 2U, 1U);
++        const uint32_t rasterShaderThreads = workerBudget.raster;
+ #   endif
+-        const uint32_t ubershaderThreads = uint32_t(std::max(int(threadsAvailable) - 2, 1));
++        const uint32_t ubershaderThreads = workerBudget.uber;
++        fprintf(stderr, "[perf] renderer workers: raster=%u uber=%u texture=%u\n",
++            rasterShaderThreads, workerBudget.uber, workerBudget.texture);
+         rasterShaderCache = std::make_unique<RasterShaderCache>(rasterShaderThreads, ubershaderThreads);
+         rasterShaderCache->setup(device.get(), renderInterface->getCapabilities().shaderFormat, shaderLibrary.get(), multisampling);
+ 
+@@ -389,12 +405,19 @@ namespace RT64 {
+ #   endif
+ 
+         // Create the texture cache.
+-        const uint32_t textureCacheThreads = std::max(threadsAvailable / 4U, 1U);
++        const uint32_t textureCacheThreads = workerBudget.texture;
+         textureCache = std::make_unique<TextureCache>(textureDirectWorker.get(), textureCopyWorker.get(), textureCacheThreads, shaderLibrary.get());
+ 
+         // Compute the approximate pool for texture replacements from the dedicated video memory.
+         const uint64_t MinimumTexturePoolSize = 512 * 1024 * 1024;
+         uint64_t texturePoolSize = std::max((deviceDescription.dedicatedVideoMemory * 2) / 3, MinimumTexturePoolSize);
++#ifdef __ANDROID__
++        // Mobile GPUs share system RAM. This is an eviction budget, not an
++        // eager allocation; avoid retaining most of a handheld's memory.
++        texturePoolSize = MinimumTexturePoolSize;
++#endif
++        fprintf(stderr, "[perf] replacement texture cache budget: %llu MiB\n",
++            static_cast<unsigned long long>(texturePoolSize / (1024 * 1024)));
+         textureCache->setReplacementPoolMaxSize(texturePoolSize);
+ 
+ #   if RT_ENABLED

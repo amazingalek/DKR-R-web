@@ -9,7 +9,7 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include <bcrypt.h>
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__EMSCRIPTEN__)
 #include <sys/random.h>
 #include <unistd.h>
 #else
@@ -56,7 +56,7 @@ bool random_bytes(std::span<std::uint8_t> output) {
 #if defined(_WIN32)
     return BCryptGenRandom(nullptr, output.data(),
         static_cast<ULONG>(output.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__EMSCRIPTEN__)
     std::size_t offset = 0U;
     while (offset < output.size()) {
         const ssize_t count = getrandom(output.data() + offset,

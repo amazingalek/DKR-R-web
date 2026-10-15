@@ -6,6 +6,11 @@ function(dkr_stage_patch target source stage_name patch)
     set(scratch "${CMAKE_BINARY_DIR}/patch-work/${stage_name}")
     file(REMOVE_RECURSE "${scratch}")
     set(files ${ARGN})
+    # The web build's checkouts carry N64Recomp-browser's patches too (scripts/build_web.sh), and where those change the
+    # lines a stage does, patches/web/stage/<stage>.patch is the same stage written on top of them.
+    if(EMSCRIPTEN AND EXISTS "${DKRPORT_ROOT}/patches/web/stage/${stage_name}.patch")
+        set(patch "${DKRPORT_ROOT}/patches/web/stage/${stage_name}.patch")
+    endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${patch}")
     foreach(file IN LISTS files)
         get_filename_component(parent "${file}" DIRECTORY)

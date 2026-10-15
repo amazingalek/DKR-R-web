@@ -1,5 +1,17 @@
 #include "legacy_mod_process.hpp"
 #include "legacy_mod_format.hpp"
+#if defined(__EMSCRIPTEN__)
+// A web page can't start another process, and the import worker is one, so a
+// page imports no mods: every import fails before it starts.
+namespace dkr::mods {
+WorkerResult run_worker(const std::filesystem::path&, const std::filesystem::path&,
+    const std::function<bool()>&, std::chrono::milliseconds) {
+    return {WorkerOutcome::Failed, 0};
+}
+void constrain_import_worker() {}
+void sandbox_import_worker(const std::filesystem::path&) {}
+} // namespace dkr::mods
+#else
 #include <thread>
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -212,3 +224,4 @@ WorkerResult run_worker(const std::filesystem::path& executable,const std::files
 #endif
 }
 } // namespace dkr::mods
+#endif

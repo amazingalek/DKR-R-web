@@ -39,6 +39,9 @@
 #include "runtime_texture_packs.hpp"
 #include "runtime_ui.hpp"
 #include "runtime_hud_layout.hpp"
+#if defined(__EMSCRIPTEN__)
+#include "web_page.hpp"
+#endif
 #include <SDL.h>
 #endif
 
@@ -917,6 +920,14 @@ int DkrMain(int argc, char** argv) {
         }
         if(!accepted){std::fprintf(stderr,"[rollback][check] normal lobby launch failed: %s\n",rom_error.c_str());online.disconnect();dkr::runtime::platform::shutdown();return 5;}
         std::fprintf(stderr,"[rollback][check] normal Quick Join/countdown accepted; owners=%u\n",launch.owned_check_players);
+    }
+#endif
+#if defined(__EMSCRIPTEN__)
+    // A page has its own launcher (web_page.cpp): the ImGui one needs an SDL
+    // renderer, which a page hasn't got.
+    if (rom_path.empty()) {
+        rom_path = dkr::runtime::web::choose_rom(config_directory);
+        rom_identified = false;
     }
 #endif
     if (rom_path.empty()) {

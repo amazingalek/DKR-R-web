@@ -1,0 +1,156 @@
+diff --git a/ultramodern/src/threads.cpp b/ultramodern/src/threads.cpp
+--- a/ultramodern/src/threads.cpp
++++ b/ultramodern/src/threads.cpp
+@@ -4,2 +4,6 @@
+ #include <string>
++#include <mutex>
++#include <unordered_set>
++#include "native_guest_lifetime.hpp"
++
+ 
+@@ -37,2 +41,16 @@
+ extern std::atomic_bool exited;
++// Includes paused and never-started guests, not only completed threads.
++// Cleaner deletion and publication of host_thread are serialized here.
++static std::mutex native_guest_mutex;
++static std::unordered_set<UltraThreadContext*> native_guests;
++
++void ultramodern::cancel_native_guest_threads() {
++    std::lock_guard lock(native_guest_mutex);
++    for (auto* context : native_guests) context->running.signal();
++}
++
++static void require_live_guest_session() {
++    if (exited.load()) throw ultramodern::thread_terminated{};
++}
+ 
+@@ -155,2 +173,3 @@
+     thread_context->running.wait();
++    require_live_guest_session();
+     // If this thread's context was replaced by another thread or deleted, destroy it again from its own context.
+@@ -163,2 +182,4 @@
+ void resume_thread(OSThread* t) {
++    std::lock_guard lock(native_guest_mutex);
++    require_live_guest_session();
+     debug_printf("[Thread] Resuming execution of thread %d\n", t->id);
+@@ -169,2 +190,4 @@
+ void run_next_thread(RDRAM_ARG1) {
++    std::lock_guard lock(native_guest_mutex);
++    require_live_guest_session();
+     if (ultramodern::thread_queue_empty(PASS_RDRAM ultramodern::running_queue)) {
+@@ -178,2 +198,3 @@
+ void ultramodern::run_next_thread_and_wait(RDRAM_ARG1) {
++    require_live_guest_session();
+     UltraThreadContext* cur_context = TO_PTR(OSThread, thread_self)->context;
+@@ -184,2 +205,3 @@
+ void ultramodern::resume_thread_and_wait(RDRAM_ARG OSThread *t) {
++    require_live_guest_session();
+     UltraThreadContext* cur_context = TO_PTR(OSThread, thread_self)->context;
+@@ -214,2 +236,2 @@
+-    if (self->context == thread_context) {
++    if (!exited.load() && self->context == thread_context) {
+         debug_printf("[Thread] Thread started: %d\n", self->id);
+@@ -241,2 +263,3 @@
+ extern "C" void osStartThread(RDRAM_ARG PTR(OSThread) t_) {
++    require_live_guest_session();
+     OSThread* t = TO_PTR(OSThread, t_);
+@@ -257,2 +280,3 @@
+ extern "C" void osCreateThread(RDRAM_ARG PTR(OSThread) t_, OSId id, PTR(thread_func_t) entrypoint, PTR(void) arg, PTR(void) sp, OSPri pri) {
++    require_live_guest_session();
+     debug_printf("[os] Create Thread %d\n", id);
+@@ -276,3 +300,16 @@
+     t->context = context;
+-    context->host_thread = std::thread{_thread_func, PASS_RDRAM t_, entrypoint, arg, t->context};
++    {
++        std::lock_guard lock(native_guest_mutex);
++        if (exited.load()) { t->context = nullptr; delete context; throw ultramodern::thread_terminated{}; }
++        native_guests.insert(context);
++        try {
++            context->host_thread = std::thread{_thread_func, PASS_RDRAM t_, entrypoint, arg, context};
++            // The cleaner cannot delete this context while its creator waits.
++            context->initialized.wait();
++        } catch (...) {
++            native_guests.erase(context);
++            t->context = nullptr;
++            delete context;
++            throw;
++        }
++    }
+ 
+@@ -280,2 +318,1 @@
+-    context->initialized.wait();
+     debug_printf("[os] Thread %d is ready to be started\n", t->id);
+@@ -355,2 +392,9 @@
+-    if (context->host_thread.joinable()) {
++    // Publication must finish before the cleaner can inspect host_thread.
++    {
++        std::lock_guard lock(native_guest_mutex);
++        assert(native_guests.contains(context));
++    }
++    if (context->host_thread.joinable()) {
+         context->host_thread.join();
+@@ -358,2 +402,6 @@
+     }
++    {
++        std::lock_guard lock(native_guest_mutex);
++        native_guests.erase(context);
++    }
+     delete context;
+@@ -390,7 +438,28 @@
+ void ultramodern::join_thread_cleaner_thread() {
+     if (thread_cleaner_thread.joinable()) {
+         thread_cleaner_thread.join();
+     }
+-    drain_deleted_threads();
++    cancel_native_guest_threads();
++    const auto started = std::chrono::steady_clock::now();
++    auto next_report = started + std::chrono::seconds(5);
++    for (;;) {
++        {
++            std::lock_guard lock(native_guest_mutex);
++            if (native_guests.empty()) break;
++        }
++        UltraThreadContext* context = nullptr;
++        if (deleted_threads.wait_dequeue_timed(context, std::chrono::milliseconds(10))) {
++            delete_thread_context(context);
++        }
++        if (std::chrono::steady_clock::now() >= next_report) {
++            std::lock_guard lock(native_guest_mutex);
++            std::fprintf(stderr, "[runtime][retire] waiting for %zu native guest owners; RAM remains held\n", native_guests.size());
++            next_report += std::chrono::seconds(5);
++        }
++    }
++    drain_deleted_threads();
++    reset_native_guest_queue();
+ }
+diff --git a/ultramodern/src/threadqueue.cpp b/ultramodern/src/threadqueue.cpp
+--- a/ultramodern/src/threadqueue.cpp
++++ b/ultramodern/src/threadqueue.cpp
+@@ -3,3 +3,8 @@
+ #include "ultramodern/ultramodern.hpp"
++#include "native_guest_lifetime.hpp"
+ 
+ static PTR(OSThread) running_queue_impl = NULLPTR;
++
++void ultramodern::reset_native_guest_queue() {
++    running_queue_impl = NULLPTR;
++}
+ 
+ static PTR(OSThread)* queue_to_ptr(RDRAM_ARG PTR(PTR(OSThread)) queue) {
+diff --git a/ultramodern/src/scheduling.cpp b/ultramodern/src/scheduling.cpp
+--- a/ultramodern/src/scheduling.cpp
++++ b/ultramodern/src/scheduling.cpp
+@@ -1,3 +1,9 @@
+ #include "ultramodern/ultramodern.hpp"
++extern std::atomic_bool exited;
++static void require_live_scheduler() {
++    if (exited.load()) throw ultramodern::thread_terminated{};
++}
+ 
+ void ultramodern::schedule_running_thread(RDRAM_ARG PTR(OSThread) t_) {
++    require_live_scheduler();
+     debug_printf("[Scheduling] Adding thread %d to the running queue\n", TO_PTR(OSThread, t_)->id);
+@@ -20,2 +26,3 @@
+ void ultramodern::check_running_queue(RDRAM_ARG1) {
++    require_live_scheduler();
+     // Check if there are any threads in the running queue.

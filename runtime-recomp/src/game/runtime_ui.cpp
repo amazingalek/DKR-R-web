@@ -9343,6 +9343,11 @@ void dkr::runtime::ui::draw(RT64::Application& application) {
         dkr::runtime::enhancements::effective_texture_lod_bias());
     RT64::setGeneratedMipSampling(
         dkr::runtime::enhancements::modern_presentation_enabled());
+#if defined(__EMSCRIPTEN__)
+    // The overlay draws through RT64's ImGui inspector, which has no WebGPU
+    // backend, so a page shows none: the game runs on the settings it has.
+    return;
+#endif
     if (application.presentQueue == nullptr || application.framebufferGraphicsWorker == nullptr) {
         return;
     }
@@ -9775,6 +9780,11 @@ bool dkr::runtime::ui::input_capture_active() {
 }
 
 void dkr::runtime::ui::toggle_overlay() {
+#if defined(__EMSCRIPTEN__)
+    // A page has no overlay (draw), and an open one would hold the game's
+    // input with nothing on screen.
+    return;
+#endif
 #if defined(__ANDROID__) || defined(DKR_IOS)
     dkr::runtime::mobile::clear();
 #endif
