@@ -79,3 +79,10 @@ the map through its own teleport and drives the player's kart toward each checkp
 player's kart instead: DKR-R's display list check then rejects every frame. A recording takes about 50 minutes.
 
 ## Played
+
+From Pages (main 082ab50), cold, an RTX 2070, a quiet host, 2026-10-16, through `web/play_plan.json` (the title, the
+menus, Timber's Island and a Dino Domain race): Chrome 155 headless waited for no shader and drew 30.0 presents a
+second, the game's own rate (RT64's Original refresh presents each frame the game draws); in a window, 30.0; with the
+page's thread slowed 3 times (Chrome's CPU throttling, a stand-in for a laptop's CPU), 30.0. Firefox 158 waited 2.4 s
+for the boot's 23 shaders, 0.5 s for the menus and 0.6 s for the race, then drew 30.0. At 3840x2000, uncapped, 29.8
+in Chrome and 30.0 in Firefox. No sound short, no WebGPU errors, in any of them.
