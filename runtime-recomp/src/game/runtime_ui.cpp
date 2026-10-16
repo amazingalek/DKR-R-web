@@ -2588,6 +2588,11 @@ void LoadSettings() {
         migrated = true;
     }
     profile = resolved_profile;
+#if defined(__EMSCRIPTEN__)
+    // A page always plays Modern, the profile that interpolates: every N64Recomp-browser page presents at the
+    // display's rate (its README, The recomp's own code), and a page has no launcher or overlay to pick one.
+    profile = dkr::runtime::enhancements::PresentationProfile::Modern;
+#endif
     dkr::runtime::enhancements::set_presentation_profile(profile);
     ApplyProfileGraphics(config, profile);
     config.developer_mode = false;

@@ -295,6 +295,14 @@ void ApplyConfig(RT64::Application& application,
             application.userConfig.refreshRate =
                 RT64::UserConfiguration::RefreshRate::Manual;
             application.userConfig.refreshRateTarget = g_effective_refresh_target;
+#if defined(__EMSCRIPTEN__)
+            // SDL's Emscripten port reports no refresh rate, so the target above is 60 on every display. On a
+            // page RT64's own estimate is the browser's animation frames as plume times them, so Match display
+            // is RT64's Display there: a 144 Hz display gets 144, and ?uncapped the page's whole rate.
+            if (config.rr_option != ultramodern::renderer::RefreshRate::Manual) {
+                application.userConfig.refreshRate = RT64::UserConfiguration::RefreshRate::Display;
+            }
+#endif
         } else {
             g_effective_refresh_target = 30;
             application.userConfig.refreshRate =
