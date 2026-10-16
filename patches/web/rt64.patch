@@ -256,7 +256,7 @@ index 27659ec..3b8d1cd 100644
          MipConfiguration::originals=0; MipConfiguration::replacements=0;
          MipConfiguration::authored=0; MipConfiguration::singleLevel=0;
 diff --git a/src/render/rt64_shader_library.cpp b/src/render/rt64_shader_library.cpp
-index a370263..3b160b2 100644
+index a370263..ccb7599 100644
 --- a/src/render/rt64_shader_library.cpp
 +++ b/src/render/rt64_shader_library.cpp
 @@ -6,56 +6,106 @@
@@ -759,7 +759,7 @@ index a370263..3b160b2 100644
              RenderGraphicsPipelineDesc pipelineDesc;
              pipelineDesc.pipelineLayout = fbChangesDrawColor.pipelineLayout.get();
              pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
-@@ -818,7 +915,7 @@ namespace RT64 {
+@@ -818,13 +915,13 @@ namespace RT64 {
              pipelineDesc.multisampling = multisampling;
              fbChangesDrawColor.pipeline = device->createGraphicsPipeline(pipelineDesc);
  
@@ -768,6 +768,22 @@ index a370263..3b160b2 100644
              pipelineDesc.pipelineLayout = fbChangesDrawDepth.pipelineLayout.get();
              pipelineDesc.pixelShader = depthShader.get();
              pipelineDesc.depthEnabled = true;
+             pipelineDesc.depthFunction = RenderComparisonFunction::ALWAYS;
+             pipelineDesc.depthWriteEnabled = true;
+-            pipelineDesc.depthTargetFormat = RenderFormat::D32_FLOAT;
++            pipelineDesc.depthTargetFormat = RenderTarget::depthBufferFormat();
+             fbChangesDrawDepth.pipeline = device->createGraphicsPipeline(pipelineDesc);
+         }
+ 
+@@ -861,7 +958,7 @@ namespace RT64 {
+             pipelineDesc.depthEnabled = true;
+             pipelineDesc.depthFunction = RenderComparisonFunction::ALWAYS;
+             pipelineDesc.depthWriteEnabled = true;
+-            pipelineDesc.depthTargetFormat = RenderFormat::D32_FLOAT;
++            pipelineDesc.depthTargetFormat = RenderTarget::depthBufferFormat();
+             pipelineDesc.pipelineLayout = rtCopyColorToDepth.pipelineLayout.get();
+             pipelineDesc.pixelShader = colorToDepthShader.get();
+             pipelineDesc.multisampling = RenderMultisampling();
 @@ -883,7 +980,7 @@ namespace RT64 {
              layoutBuilder.end();
              postProcess.pipelineLayout = layoutBuilder.create(device);
@@ -821,10 +837,48 @@ index a370263..3b160b2 100644
          }
  
 diff --git a/src/shaders/RasterPS.hlsl b/src/shaders/RasterPS.hlsl
-index 9b495ed..7b68481 100644
+index 9b495ed..1a4e104 100644
 --- a/src/shaders/RasterPS.hlsl
 +++ b/src/shaders/RasterPS.hlsl
-@@ -48,6 +48,13 @@ float sampleBackgroundDepth(int2 pixelPos, uint sampleCount) {
+@@ -45,9 +45,51 @@ float sampleBackgroundDepth(int2 pixelPos, uint sampleCount) {
+ }
+ #endif
+ 
++#if defined(DECAL_DEPTH_BOUNDS)
++// A decal's pixel shader on WebGPU, prebuilt: it reads no depth, so a decal draws in the pass that writes depth. A pass
++// can read the depth it draws to only if it writes none, and RT64 elsewhere ends the pass for each decal that follows
++// a draw that wrote depth and begins it again after: Banjo-Tooie ~25 times a frame, each pass ~70 us of Firefox's GPU
++// process. The decal check, |pixel - surface| <= max(CoplanarDepthTolerance(surface), dz), is two depth tests against
++// the surface's depth instead, in two draws with the stencil between them (RasterShader::createPipeline()): the first
++// writes the highest surface depth that passes (greater-equal; RasterParams' padding0 is 1 for it) and marks the
++// pixels, the second the lowest (less-equal), drawn where a mark is, which it takes back.
++static float decalDepth = 0.0f;
++
++// CoplanarDepthTolerance() is the same over each band of FloatToFixedDepth()'s exponent (0, 1, 2, 3 and more), so a
++// side's bound is the farthest one of the bands gives. Two depth tests pass one interval, and the check can pass two
++// pieces: within 0.0005 of where a band starts, a surface in the band below passes with its wider tolerance
++// while one in the pixel's own band just past its narrower one doesn't, and the interval draws there too.
++float decalDepthBound(float pixelDepth, float dz, bool high) {
++    // Where the exponent becomes 1, 2 and 3: FloatToFixedDepth() rounds, so half a step below 0x20000, 0x30000, 0x38000.
++    const float bandStart[4] = { 0.0f, 131071.5f / 262143.0f, 196607.5f / 262143.0f, 229375.5f / 262143.0f };
++    float bound = high ? (pixelDepth + dz) : (pixelDepth - dz);
++    for (uint e = 0; e < 4; e++) {
++        const float tolerance = 0.0005f / float(1U << e);
++        const float start = bandStart[e];
++        const float end = (e < 3) ? bandStart[e + 1] : 2.0f;
++        if (high && (pixelDepth + tolerance >= start)) {
++            // The band's surface depths up to the pixel's plus its tolerance: the last one below the next band at most.
++            bound = max(bound, min(pixelDepth + tolerance, asfloat(asuint(end) - 1U)));
++        }
++        else if (!high && (pixelDepth - tolerance < end)) {
++            bound = min(bound, max(pixelDepth - tolerance, start));
++        }
++    }
++
++    return bound;
++}
++#endif
++
  LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float2 vertexUV, float4 vertexSmoothColor, float4 vertexFlatColor,
      bool isFrontFace, out float4 resultColor, out float4 resultAlpha) 
  {
@@ -838,7 +892,18 @@ index 9b495ed..7b68481 100644
      const OtherMode otherMode = { rp.omL, rp.omH };
  #if defined(DYNAMIC_RENDER_PARAMS)
      if ((otherMode.cycleType() != G_CYC_COPY) && renderFlagCulling(rp.flags) && isFrontFace) {
-@@ -100,7 +107,7 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+@@ -89,37 +131,51 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+     }
+ 
+     if (depthDecal) {
+-        // Sample the depth buffer for this pixel to compare for the decal check.
+-        int2 pixelPos = floor(vertexPosition.xy);
+-        uint sampleCount = 1U << renderFlagSampleCount(rp.flags);
+-        float surfaceDepth = sampleBackgroundDepth(pixelPos, sampleCount);
+-
+         // Calculate the decal depth tolerance based on the depth derivatives (or the prim dz value if prim depth source is enabled).
+         float dz;
+         if (zSourcePrim) {
              dz = instanceRDPParams[instanceIndex].primDepth.y;
          }
          else {
@@ -846,9 +911,23 @@ index 9b495ed..7b68481 100644
 +            dz = (abs(ddxDepth) + abs(ddyDepth)) * FbParams.resolutionScale.y;
          }
  
++        const float pixelDepth = select(depthClampNear, max(vertexPosition.z, 0.0f), vertexPosition.z);
++#if defined(DECAL_DEPTH_BOUNDS)
++        // The depth tests do the check (decalDepthBound()).
++        decalDepth = decalDepthBound(pixelDepth, dz, gConstants.padding0 != 0);
++#else
++        // Sample the depth buffer for this pixel to compare for the decal check.
++        int2 pixelPos = floor(vertexPosition.xy);
++        uint sampleCount = 1U << renderFlagSampleCount(rp.flags);
++        float surfaceDepth = sampleBackgroundDepth(pixelPos, sampleCount);
++
          // Perform the decal depth tolerance check.
-@@ -111,15 +118,24 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+         const float DepthTolerance = max(CoplanarDepthTolerance(surfaceDepth), dz);
+-        const float pixelDepth = select(depthClampNear, max(vertexPosition.z, 0.0f), vertexPosition.z);
+         if (abs(pixelDepth - surfaceDepth) > DepthTolerance) {
+             return false;
          }
++#endif
      }
      
 -    float2 ddxVertexUV = ddx(vertexUV);
@@ -875,7 +954,7 @@ index 9b495ed..7b68481 100644
      int tileIndex0 = 0;
      int tileIndex1 = 1;
      float lodFraction;
-@@ -141,14 +157,15 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+@@ -141,14 +197,15 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
              rdpTile.nativeSampler = renderFlagNativeSampler0(rp.flags);
          }
          
@@ -895,7 +974,7 @@ index 9b495ed..7b68481 100644
          RDPTile rdpTile = RDPTiles[globalTileIndex];
          if (!renderFlagDynamicTiles(rp.flags)) {
              rdpTile.cms = oneCycleHardwareBug ? renderCMS0(rp.flags) : renderCMS1(rp.flags);
-@@ -156,10 +173,10 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+@@ -156,10 +213,10 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
              rdpTile.nativeSampler = oneCycleHardwareBug ? renderFlagNativeSampler0(rp.flags) : renderFlagNativeSampler1(rp.flags);
          }
          
@@ -909,7 +988,7 @@ index 9b495ed..7b68481 100644
      }
      
      // Color combiner.
-@@ -254,6 +271,14 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+@@ -254,6 +311,14 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
          resultColor.a = resultCvg;
      }
      
@@ -924,7 +1003,7 @@ index 9b495ed..7b68481 100644
      // Add highlight color to the last step.
      uint highlightColorUint = instanceRenderIndices[gConstants.renderIndex].highlightColor;
      if (highlightColorUint > 0) {
-@@ -290,8 +315,12 @@ void PSMain(
+@@ -290,8 +355,15 @@ void PSMain(
  #if defined(DYNAMIC_RENDER_PARAMS)
      , bool isFrontFace : SV_IsFrontFace
  #endif
@@ -934,13 +1013,19 @@ index 9b495ed..7b68481 100644
      , [[vk::location(0)]] [[vk::index(0)]] out float4 pixelColor : SV_TARGET0
      , [[vk::location(0)]] [[vk::index(1)]] out float4 pixelAlpha : SV_TARGET1
 +#endif
++#if defined(DECAL_DEPTH_BOUNDS)
++    , out float pixelDepth : SV_Depth
++#endif
  )
  {
  #if !defined(DYNAMIC_RENDER_PARAMS)
-@@ -308,6 +337,8 @@ void PSMain(
+@@ -308,6 +380,11 @@ void PSMain(
      }
  
      pixelColor = resultColor;
++#if defined(DECAL_DEPTH_BOUNDS)
++    pixelDepth = decalDepth;
++#endif
 +#if !defined(WEBGPU) || defined(DUAL_SOURCE_BLENDING)
      pixelAlpha = resultAlpha;
 -}
@@ -1357,10 +1442,16 @@ index 45ea243..5b2b8d9 100644
 +}
 \ No newline at end of file
 diff --git a/src/shared/rt64_raster_params.h b/src/shared/rt64_raster_params.h
-index ac6431c..b1b3768 100644
+index ac6431c..47538b8 100644
 --- a/src/shared/rt64_raster_params.h
 +++ b/src/shared/rt64_raster_params.h
-@@ -17,6 +17,9 @@ namespace interop {
+@@ -13,10 +13,14 @@ namespace interop {
+         uint renderIndex;
+         float mipLODBias;
+         uint generatedMipmaps;
+-        uint padding;
++        // Named as upstream names it: a prebuilt decal's draws say in it which depth bound they write (RasterPS.hlsl).
++        uint padding0;
          float2 screenScale;
          float2 screenOffset;
      };
