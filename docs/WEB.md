@@ -12,8 +12,11 @@ unchanged.
 - **DKR-R's launcher and overlay.** Both draw through ImGui on an SDL renderer or RT64's inspector, neither of which
   a page has. The page has a launcher of its own (`runtime-recomp/src/game/web_page.cpp`): Load ROM, which opens the
   browser's file picker, and Start Game once a ROM is kept. The ROM stays in the browser (IndexedDB, through
-  N64Recomp-browser's `persistent_home.js`). The game runs on the settings it has: Original refresh (30 frames a
-  second, as the desktop's default), Original water, no generated mipmaps.
+  N64Recomp-browser's `persistent_home.js`). The game runs on the settings it has, but always in DKR-R's Modern profile
+  (`runtime_ui.cpp`), the one that interpolates, since a page has no overlay to pick one: Accurate, the desktop's
+  default, holds RT64 at Original and 30. Modern's Match display is RT64's Display on a page (`rt64_renderer.cpp`),
+  since SDL's Emscripten port reports no refresh rate, so RT64 interpolates the game's 30 frames a second to the
+  display's rate. Original water, no generated mipmaps.
 - **Online play, mods and custom tracks.** Online play needs WebRTC's transport (`DKR_NETPLAY_WEBRTC` off), and mods
   are imported by a worker process, which a page can't start (`legacy_mod_process.cpp`). N64ModernRuntime's live
   recompiler (sljit) emits machine code, so the runtime's mods are off on every page too.
@@ -62,7 +65,7 @@ B, Z, Enter Start, Q and E the shoulders, IJKL the C buttons).
 The page builds the shaders the game uses before it draws with them, so it never draws with RT64's slow ubershader in
 the middle of a race: `web/rt64_shaders.txt` lists them in sections (its header says what each holds), and the build
 specializes each one (`RT64_PREBUILT_SHADER_LIST` in `runtime-recomp/CMakeLists.txt`). In Chrome the whole list is
-built behind the game from its first frame, and the game waits only when a frame wants 4 or more of a section's
+built in the background, and the game waits only when a frame wants 4 or more of a section's
 shaders that aren't built yet, under a small "Preparing graphics" indicator in a corner. Firefox builds a pipeline in
 line with the rest of its GPU work, so there those above the first section (the logos and the title) are built before
 the game starts, and a section when the game first draws it, the game waiting. A shader the list misses is built
@@ -80,9 +83,6 @@ player's kart instead: DKR-R's display list check then rejects every frame. A re
 
 ## Played
 
-From Pages (main 082ab50), cold, an RTX 2070, a quiet host, 2026-10-16, through `web/play_plan.json` (the title, the
-menus, Timber's Island and a Dino Domain race): Chrome 155 headless waited for no shader and drew 30.0 presents a
-second, the game's own rate (RT64's Original refresh presents each frame the game draws); in a window, 30.0; with the
-page's thread slowed 3 times (Chrome's CPU throttling, a stand-in for a laptop's CPU), 30.0. Firefox 158 waited 2.4 s
-for the boot's 23 shaders, 0.5 s for the menus and 0.6 s for the race, then drew 30.0. At 3840x2000, uncapped, 29.8
-in Chrome and 30.0 in Firefox. No sound short, no WebGPU errors, in any of them.
+How the page plays in Chrome and Firefox, run by run, is recorded in N64Recomp-browser's
+[plays.jsonl](https://github.com/amazingalek/N64Recomp-browser/blob/main/plays.jsonl) and its
+[games table](https://github.com/amazingalek/N64Recomp-browser#games).
