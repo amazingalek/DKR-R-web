@@ -9,14 +9,19 @@
 
 #include "game_registration.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include <emscripten.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <emscripten/threading.h>
 
 namespace {
@@ -114,6 +119,40 @@ int Ask(bool have_rom, const std::string& message, const std::string& folder) {
     return state.load();
 }
 
+// Copies a file whole. A page's files are in the page's thread's file system, and
+// every read or write from another thread waits for that thread: libc++'s
+// copy_file goes through fstreams a few KB at a time, thousands of round trips
+// for the ROM, and the launcher presents nothing meanwhile. So it is read in
+// 4 MB pieces and written in one.
+bool CopyWholeFile(const std::filesystem::path& from, const std::filesystem::path& to) {
+    const int in = open(from.c_str(), O_RDONLY);
+    struct stat st;
+    if (in < 0 || fstat(in, &st) != 0) {
+        if (in >= 0) close(in);
+        return false;
+    }
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(st.st_size));
+    std::size_t done = 0;
+    while (done < bytes.size()) {
+        const ssize_t got = read(in, bytes.data() + done,
+            std::min<std::size_t>(bytes.size() - done, 4 << 20));
+        if (got <= 0) break;
+        done += static_cast<std::size_t>(got);
+    }
+    close(in);
+    if (done != bytes.size()) return false;
+    const int out = open(to.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out < 0) return false;
+    done = 0;
+    while (done < bytes.size()) {
+        const ssize_t put = write(out, bytes.data() + done, bytes.size() - done);
+        if (put <= 0) break;
+        done += static_cast<std::size_t>(put);
+    }
+    close(out);
+    return done == bytes.size();
+}
+
 // A ROM the page can play: the US v1.0 one, the only payload it is built with.
 bool Playable(const std::filesystem::path& path, std::string& error) {
     dkr::runtime::rom::Identity identity{};
@@ -144,9 +183,9 @@ std::filesystem::path dkr::runtime::web::choose_rom(const std::filesystem::path&
         const std::filesystem::path picked = std::filesystem::path(picked_folder) / "rom";
         if (Playable(picked, error)) {
             std::filesystem::create_directories(config_directory, ec);
-            std::filesystem::copy_file(picked, kept, std::filesystem::copy_options::overwrite_existing, ec);
-            message = ec ? "The ROM could not be kept in this browser: " + ec.message() : std::string();
-            if (ec) {
+            const bool copied = CopyWholeFile(picked, kept);
+            message = copied ? std::string() : "The ROM could not be kept in this browser.";
+            if (!copied) {
                 std::filesystem::remove(picked, ec);
                 continue;
             }

@@ -16,6 +16,13 @@
 #include <utility>
 #include <vector>
 
+#ifdef __EMSCRIPTEN__
+#include <algorithm>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 namespace dkr::runtime::rom {
 namespace {
 
@@ -335,6 +342,28 @@ bool materialize_canonical(const std::filesystem::path& source,
         return true;
     }
 
+#ifdef __EMSCRIPTEN__
+    // A page's files are in the page's thread's file system, and every read from
+    // another thread waits for that thread: an istreambuf_iterator reads the ROM
+    // there a KB at a time, thousands of round trips. So it is read in 4 MB pieces.
+    const int input = open(source.c_str(), O_RDONLY);
+    struct stat input_stat;
+    if (input < 0 || fstat(input, &input_stat) != 0) {
+        if (input >= 0) close(input);
+        error = "The selected ROM could not be reopened for normalisation.";
+        return false;
+    }
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(input_stat.st_size));
+    std::size_t bytes_read = 0;
+    while (bytes_read < bytes.size()) {
+        const ssize_t got = read(input, bytes.data() + bytes_read,
+            std::min<std::size_t>(bytes.size() - bytes_read, 4 << 20));
+        if (got <= 0) break;
+        bytes_read += static_cast<std::size_t>(got);
+    }
+    close(input);
+    bytes.resize(bytes_read);
+#else
     std::ifstream input(source, std::ios::binary);
     if (!input) {
         error = "The selected ROM could not be reopened for normalisation.";
@@ -342,6 +371,7 @@ bool materialize_canonical(const std::filesystem::path& source,
     }
     std::vector<std::uint8_t> bytes{
         std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+#endif
     if (bytes.size() != identity.file_size || bytes.size() != kRetailRomSize) {
         error = "The selected ROM changed while it was being prepared.";
         return false;
