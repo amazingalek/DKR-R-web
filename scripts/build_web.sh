@@ -56,13 +56,18 @@ step "Patches"
 #   TextureSampler.hlsli keep DKR-R's settings (mip LOD bias, generated mipmaps) on the CPU side, which the page's
 #   shaders don't read: the page has neither (no launcher to set them, and generated mipmaps stay off on WebGPU).
 #   N64ModernRuntime: DKR-R's runtime is from before upstream's deprecated mods, which the web patch's context has, so
-#   mods.hpp, mods.cpp and recomp.cpp take DKR-R's with the web's register_precompiled_mod.
+#   mods.hpp, mods.cpp and recomp.cpp take DKR-R's with the web's register_precompiled_mod. mesgqueue.cpp takes DKR-R's
+#   alone: the web's change there is the list a blocked external message waits in (ULTRAMODERN_HOLD_BLOCKED_MESSAGES), so
+#   the idle thread doesn't spin on it, and DKR-R does the same its own way (patches/performance/
+#   runtime-deferred-events.patch, the DeferredEventQueue's blocked list, moved back when a receive frees its queue).
+#   That patch is staged at configure time over this file (runtime-recomp/cmake/PerformancePatches.cmake), so it has to
+#   find DKR-R's lines here.
 rt64_shared="src/hle/rt64_game_frame.cpp src/hle/rt64_workload_queue.cpp src/render/rt64_shader_library.cpp
 src/shaders/RasterPS.hlsl src/shaders/TextureSampler.hlsli src/shared/rt64_raster_params.h"
 web_patches="rt64 extern/rt64 $(echo $rt64_shared)
 plume extern/rt64/src/contrib/plume
 hlslpp extern/rt64/src/contrib/hlslpp
-N64ModernRuntime extern/n64-modern-runtime librecomp/include/librecomp/mods.hpp librecomp/src/mods.cpp librecomp/src/recomp.cpp
+N64ModernRuntime extern/n64-modern-runtime librecomp/include/librecomp/mods.hpp librecomp/src/mods.cpp librecomp/src/recomp.cpp ultramodern/src/mesgqueue.cpp
 N64Recomp extern/n64-modern-runtime/N64Recomp"
 stamp="$(git -C $browser rev-parse HEAD) $( (cat patches/manifest.json $(ls patches/web/*.patch 2> /dev/null); echo "$web_patches") | sha1sum | cut -c1-40)"
 if [[ "$(cat build/web-patched 2> /dev/null)" != "$stamp" ]]; then
