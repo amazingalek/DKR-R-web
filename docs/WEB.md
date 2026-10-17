@@ -40,6 +40,10 @@ unchanged.
 4. The decomp's ELF of US v1.0 and the recompiled code from it.
 5. The page, with `emcmake cmake -S runtime-recomp -B build-web`, then `ninja -C build-web DKRPortGame`.
 
+`scripts/build_web.sh --patches` needs no ROM: steps 1 and 2, then a configure with no recompiled code, which stages
+every patch of DKR-R's a page has. N64Recomp-browser's CI runs it with its own checkout, so a change there that stops
+applying over DKR-R's patches fails on its pull request.
+
 `build-web/bin/Release` then holds `DKR-R.html`, `.js`, `.wasm`, `.data` and `coi_serviceworker.js`. Serve that folder
 with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, or as is on a host
 that can't set headers, where `coi_serviceworker.js` sets them after one reload. It needs a browser with WebGPU (Chrome

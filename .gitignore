@@ -1,6 +1,7 @@
 # Build output
 /build/
 /build-web/
+/build-web-patches/
 /dist/
 /build-logs/
 /.deps/

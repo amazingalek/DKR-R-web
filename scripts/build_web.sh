@@ -3,6 +3,7 @@
 # emsdk active (N64Recomp-browser's README, Using it in a recomp, says what else: naga, spirv-opt, ccache):
 #
 #   bash scripts/build_web.sh <US v1.0 ROM> [--prepare]
+#   bash scripts/build_web.sh --patches
 #
 # 1. The pinned dependencies (dependencies.lock.json) the page needs, fetched by scripts/bootstrap_dependencies.py:
 #    not libdatachannel, SDL3 or SDL2 (the page has no online play, no input worker, and Emscripten's own SDL2).
@@ -16,12 +17,21 @@
 #    and the recompiled code from it by DKR-R's Patch Pipeline policy (as scripts/Prepare-DKR-Runtime-macOS.sh does),
 #    in build/generated/v77. The page has US v1.0 only: Rev A would be a second copy of the game's code in the wasm.
 # 5. The page, with emcmake, in build-web. --prepare stops before it.
+#
+# --patches needs no ROM: steps 1 and 2 without the decomp, then the page configured with no recompiled code in
+# build-web-patches, which stages DKR-R's own configure-time patches (runtime-recomp/cmake/StagedPatch.cmake, every
+# stage a page has) over the patched checkouts. It fails where any layer stops applying. N64Recomp-browser's CI runs it
+# with its own checkout as lib/N64Recomp-browser, so a change there that breaks this stack fails on its PR.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-[[ $# -ge 1 ]] || { echo "usage: $0 <US v1.0 ROM> [--prepare]" >&2; exit 2; }
-rom="$(realpath "$1")"
-prepare_only=0
-[[ "${2:-}" == --prepare ]] && prepare_only=1
+[[ $# -ge 1 ]] || { echo "usage: $0 <US v1.0 ROM> [--prepare] | --patches" >&2; exit 2; }
+patches_only=0 prepare_only=0
+if [[ "$1" == --patches ]]; then
+    patches_only=1
+else
+    rom="$(realpath "$1")"
+    [[ "${2:-}" == --prepare ]] && prepare_only=1
+fi
 cd "$root"
 jobs="$(nproc)"
 browser=lib/N64Recomp-browser
@@ -31,7 +41,8 @@ step() { printf '\n== %s\n' "$*"; }
 
 # --- 1. Dependencies ---
 step "Dependencies"
-deps="dkr-decomp n64-modern-runtime rt64 gekkonet monocypher mbedtls"
+deps="n64-modern-runtime rt64 gekkonet monocypher mbedtls"
+[[ $patches_only == 1 ]] || deps="dkr-decomp $deps"
 python3 - $deps <<'PY' | while IFS=$'\t' read -r name destination commit; do
 import json, sys
 wanted = set(sys.argv[1:])
@@ -45,7 +56,7 @@ PY
         python3 scripts/bootstrap_dependencies.py --only "$name" > /dev/null
     fi
 done
-git -C extern/dkr-decomp submodule update -q --init --recursive
+[[ $patches_only == 1 ]] || git -C extern/dkr-decomp submodule update -q --init --recursive
 
 # --- 2. Patches ---
 step "Patches"
@@ -81,6 +92,12 @@ if [[ "$(cat build/web-patched 2> /dev/null)" != "$stamp" ]]; then
         [[ ! -f patches/web/$name.patch ]] || git -C "$checkout" apply --whitespace=nowarn "$root/patches/web/$name.patch"
     done <<< "$web_patches"
     mkdir -p build && echo "$stamp" > build/web-patched
+fi
+if [[ $patches_only == 1 ]]; then
+    rm -rf build-web-patches
+    emcmake cmake -S runtime-recomp -B build-web-patches -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DDKR_RUNTIME_BUILD_GENERATED=OFF -DRT64_NAGA_EXECUTABLE="$(command -v naga)"
+    exit 0
 fi
 
 # --- 3. N64Recomp ---
