@@ -1,9 +1,10 @@
 # Diddy Kong Racing (US 1.0), recorded by web/record_shaders.sh from web/shader_plan.json in headless Chrome: the
 # logos and the title (section 0); the title's demo; the menus from the title to Adventure; Timber's Island; then a
 # section a world: its hub, and each race, battle and boss race driven ~40 s after the countdown, the player's kart
-# steered toward each checkpoint; Future Fun Land; Wizpig's two races; the trophy podium; a race's results.
-# Each map is reached by web/shader_survey.js through the game's own teleport, in a page load of its own.
-# Not recorded: multiplayer (split screen), Tracks mode's menus, the cutscenes between worlds, Adventure 2.
+# steered toward each checkpoint; Future Fun Land; Wizpig's two races, the second driven ~70 s, and after them the
+# party and the two endings (maps 56, 63 and 64, cutscenes watched as they play); the trophy podium; a race's results.
+# Each map is reached by web/shader_survey.js through the game's own teleport, a race or hub in a page load of its own.
+# Not recorded: multiplayer (split screen), Tracks mode's menus, the other cutscenes between worlds, Adventure 2.
 # A world's section holds every description its maps drew, those another section holds too: each is built once.
 c8104a50 00182c0f fc127eac f00ff23f 088a000c
 00504240 00000c0f fc119623 ff2fffff 008a000b
@@ -273,6 +274,12 @@ c8104a50 00182c0f fc127eac f00ff23f 088a0008
 00504b50 00082c0f fc309861 5532ff7f 088a0008
 00504240 00002c0f fc119623 ff2fffff 0ccb540b
 c8104dd8 00182c0f fc127eac f00ff23f 099b100c
+c8104e50 00182c0f fc127eac f00ff23f 0ccb5408
+c81049d8 00180c0f fc567e03 4f0e77ff 0800000c
+001049d8 00182c0f fc1596a4 30fdfe38 088a0008
+001049d8 00182c0f fc1596a4 30fdfe38 099b1008
+001049d8 00182c0f fc1596a4 30fdfe38 0bba440c
+001049d8 00182c0f fc1596a4 30fdfe38 0bba4408
 section trophy
 00112078 00182c0f fc2266ac 1010923f 088e0008
 section results

@@ -75,10 +75,10 @@ line with the rest of its GPU work, so there those above the first section (the 
 the game starts, and a section when the game first draws it, the game waiting. A shader the list misses is built
 behind the game, and the page remembers it and builds it with the rest on the next visit.
 
-The list holds 107 descriptions (134 different shader stages, 1.5 MB of WGSL) in 12 sections: the logos and the title
-first, then the menus, Timber's Island, each of the five worlds (its hub, races, battle, boss race and trophy race),
-the trophy podium and a race's results. A world's section holds every description its maps draw, those another world
-shares too; each is built once.
+The list holds 113 descriptions in 12 sections (the 107 first recorded made 134 different shader stages, 1.5 MB of
+WGSL): the logos and the title first, then the menus, Timber's Island, each of the five worlds (its hub, races, battle,
+boss race and trophy race; Wizpig's also the party and the two endings), the trophy podium and a race's results. A
+world's section holds every description its maps draw, those another world shares too; each is built once.
 
 `web/record_shaders.sh` records the list (its header says how): N64Recomp-browser's recorder drives the page in
 headless Chrome through `web/shader_plan.json`, a page load per map, in which `web/shader_survey.js` takes the game to

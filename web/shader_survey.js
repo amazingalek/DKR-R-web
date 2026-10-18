@@ -7,6 +7,7 @@
 // - with how "finish", marks the player's kart finished instead (racer->raceFinished): the AI drives it, the finish
 //   camera follows it and the game goes on to its results;
 // - with how "stand", leaves the player's kart at the start while the others race;
+// - with how "watch", a cutscene map, which has no racer (the party, the endings): stays there that long;
 // - in a hub, where there is no race, drives round and round with the gas held.
 // The AI can't simply drive the player's kart (playerIndex -1): DKR-R's display list check then rejects every frame
 // ("counted display-list address=0x000000"), and the level, once left, leaks the game's own memory.
@@ -124,8 +125,12 @@
     wb(gNextMap, map);
     wb(gLevelLoadType, 4);
     wh(gLevelLoadTimer, 2);
-    if (!await until(() => (word(gPlayableMapId) | 0) === map && !rb(gIsLoading) && racer(), 15000)) {
+    if (!await until(() => (word(gPlayableMapId) | 0) === map && !rb(gIsLoading) && (racer() || how === 'watch'), 15000)) {
       return `map ${map} never loaded: ${JSON.stringify(dkrState())}`;
+    }
+    if (how === 'watch') {
+      await sleep(seconds * 1000);
+      return `map ${map}: watched, ${JSON.stringify(dkrState())}`;
     }
     await until(() => (word(gNumRacers) | 0) > 1, 3000); // a race's racers come a moment after the map
     const racers = word(gNumRacers) | 0;

@@ -1,6 +1,6 @@
 {
  "page": "DKR-R.html",
- "header": ["Diddy Kong Racing (US 1.0), recorded by web/record_shaders.sh from web/shader_plan.json in headless Chrome: the", "logos and the title (section 0); the title's demo; the menus from the title to Adventure; Timber's Island; then a", "section a world: its hub, and each race, battle and boss race driven ~40 s after the countdown, the player's kart", "steered toward each checkpoint; Future Fun Land; Wizpig's two races; the trophy podium; a race's results.", "Each map is reached by web/shader_survey.js through the game's own teleport, in a page load of its own.", "Not recorded: multiplayer (split screen), Tracks mode's menus, the cutscenes between worlds, Adventure 2.", "A world's section holds every description its maps drew, those another section holds too: each is built once."],
+ "header": ["Diddy Kong Racing (US 1.0), recorded by web/record_shaders.sh from web/shader_plan.json in headless Chrome: the", "logos and the title (section 0); the title's demo; the menus from the title to Adventure; Timber's Island; then a", "section a world: its hub, and each race, battle and boss race driven ~40 s after the countdown, the player's kart", "steered toward each checkpoint; Future Fun Land; Wizpig's two races, the second driven ~70 s, and after them the", "party and the two endings (maps 56, 63 and 64, cutscenes watched as they play); the trophy podium; a race's results.", "Each map is reached by web/shader_survey.js through the game's own teleport, a race or hub in a page load of its own.", "Not recorded: multiplayer (split screen), Tracks mode's menus, the other cutscenes between worlds, Adventure 2.", "A world's section holds every description its maps drew, those another section holds too: each is built once."],
  "load": [
   ["wait", 6000]
  ],
@@ -588,7 +588,23 @@
     ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
     ["wait", 2000],
     ["keep", true],
-    ["eval", "go(55, 45)"]
+    ["eval", "go(55, 75)"]
+   ]
+  },
+  {
+   "name": "wizpig",
+   "steps": [
+    ["keep", false],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
+    ["wait", 2000],
+    ["keep", true],
+    ["eval", "go(56, 25, \"watch\")"],
+    ["eval", "go(63, 30, \"watch\")"],
+    ["eval", "go(64, 60, \"watch\")"]
    ]
   },
   {
