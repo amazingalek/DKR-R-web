@@ -71,6 +71,8 @@ step "Patches"
 #   alone: the web's change there is the list a blocked external message waits in (ULTRAMODERN_HOLD_BLOCKED_MESSAGES), so
 #   the idle thread doesn't spin on it, and DKR-R does the same its own way (patches/performance/
 #   runtime-deferred-events.patch, the DeferredEventQueue's blocked list, moved back when a receive frees its queue).
+#   librecomp/src/config.cpp isn't in DKR-R's runtime, so the web's change there (only the settings a player changed
+#   are saved) has nothing to patch.
 #   That patch is staged at configure time over this file (runtime-recomp/cmake/PerformancePatches.cmake), so it has to
 #   find DKR-R's lines here.
 rt64_shared="src/hle/rt64_game_frame.cpp src/hle/rt64_workload_queue.cpp src/render/rt64_shader_library.cpp
@@ -78,7 +80,7 @@ src/shaders/RasterPS.hlsl src/shaders/TextureSampler.hlsli src/shared/rt64_raste
 web_patches="rt64 extern/rt64 $(echo $rt64_shared)
 plume extern/rt64/src/contrib/plume
 hlslpp extern/rt64/src/contrib/hlslpp
-N64ModernRuntime extern/n64-modern-runtime librecomp/include/librecomp/mods.hpp librecomp/src/mods.cpp librecomp/src/recomp.cpp ultramodern/src/mesgqueue.cpp
+N64ModernRuntime extern/n64-modern-runtime librecomp/include/librecomp/mods.hpp librecomp/src/mods.cpp librecomp/src/recomp.cpp ultramodern/src/mesgqueue.cpp librecomp/src/config.cpp
 N64Recomp extern/n64-modern-runtime/N64Recomp"
 stamp="$(git -C $browser rev-parse HEAD) $( (cat patches/manifest.json $(ls patches/web/*.patch 2> /dev/null); echo "$web_patches") | sha1sum | cut -c1-40)"
 if [[ "$(cat build/web-patched 2> /dev/null)" != "$stamp" ]]; then
