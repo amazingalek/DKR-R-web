@@ -9,9 +9,10 @@
 #    not libdatachannel, SDL3 or SDL2 (the page has no online play, no input worker, and Emscripten's own SDL2).
 # 2. DKR-R's own patches to them (scripts/apply_dependency_patches.py), then N64Recomp-browser's web patches on top
 #    (lib/N64Recomp-browser/patches/apply.cmake, project by project), but for the files where the two make the same
-#    change their own way (below). Patched from clean whenever lib/N64Recomp-browser or patches/ moved since the last
-#    time, which build/web-patched records: apply.cmake can't take a checkout from one version of its patches to
-#    another.
+#    change their own way (below), merged from the N64Recomp-browser commit web_merged_from names, with what the web
+#    has changed in them since merged in (apply.cmake --since). Patched from clean whenever lib/N64Recomp-browser or
+#    patches/ moved since the last time, which build/web-patched records: apply.cmake can't take a checkout from one
+#    version of its patches to another.
 # 3. N64Recomp, built natively from the patched checkout: the page needs the code the web-patched one writes.
 # 4. The decomp's ELF of US v1.0 (extern/dkr-decomp, IDO through ido-recomp, its own make setup), in build/decomp/v77,
 #    and the recompiled code from it by DKR-R's Patch Pipeline policy (as scripts/Prepare-DKR-Runtime-macOS.sh does),
@@ -60,29 +61,34 @@ done
 
 # --- 2. Patches ---
 step "Patches"
-# <name> <checkout> [files left to DKR-R's own patch]: N64Recomp-browser's patches by project.
-# Where DKR-R's patch and the web's change the same lines, the web's change to that file is left out here and made by
-# patches/web/<name>.patch instead, written on top of DKR-R's (and remade when either side changes those files):
+# <name> <checkout> [files left to patches/web/<name>.patch] [- files left to DKR-R's own patch alone]:
+# N64Recomp-browser's patches by project. Where DKR-R's patch and the web's change the same lines, the web's change to
+# that file is left out here and made by patches/web/<name>.patch instead, written on top of DKR-R's and merged from
+# N64Recomp-browser's web_merged_from. What the web has changed in those files since is merged in after it
+# (apply.cmake --since), so a later web change reaches the page by itself; one that meets DKR-R's lines stops the
+# build, the file left with conflict markers: then merge it into patches/web/<name>.patch by hand and move
+# web_merged_from to the commit merged from.
 #   rt64: game_frame.cpp and workload_queue.cpp take both; shader_library.cpp, rt64_raster_params.h, RasterPS.hlsl and
 #   TextureSampler.hlsli keep DKR-R's settings (mip LOD bias, generated mipmaps) on the CPU side, which the page's
 #   shaders don't read: the page has neither (no launcher to set them, and generated mipmaps stay off on WebGPU).
 #   N64ModernRuntime: DKR-R's runtime is from before upstream's deprecated mods, which the web patch's context has, so
 #   mods.hpp, mods.cpp and recomp.cpp take DKR-R's with the web's register_precompiled_mod. mesgqueue.cpp takes DKR-R's
-#   alone: the web's change there is the list a blocked external message waits in (ULTRAMODERN_HOLD_BLOCKED_MESSAGES), so
+#   alone, so nothing the web changes there later is merged in: the web's change there is the list a blocked external message waits in (ULTRAMODERN_HOLD_BLOCKED_MESSAGES), so
 #   the idle thread doesn't spin on it, and DKR-R does the same its own way (patches/performance/
 #   runtime-deferred-events.patch, the DeferredEventQueue's blocked list, moved back when a receive frees its queue).
 #   librecomp/src/config.cpp isn't in DKR-R's runtime, so the web's change there (only the settings a player changed
 #   are saved) has nothing to patch.
 #   That patch is staged at configure time over this file (runtime-recomp/cmake/PerformancePatches.cmake), so it has to
 #   find DKR-R's lines here.
+web_merged_from=494cc8110de23edbc394d977224d7a498fee04b7 # v0.82.0
 rt64_shared="src/hle/rt64_game_frame.cpp src/hle/rt64_workload_queue.cpp src/render/rt64_shader_library.cpp
 src/shaders/RasterPS.hlsl src/shaders/TextureSampler.hlsli src/shared/rt64_raster_params.h"
 web_patches="rt64 extern/rt64 $(echo $rt64_shared)
 plume extern/rt64/src/contrib/plume
 hlslpp extern/rt64/src/contrib/hlslpp
-N64ModernRuntime extern/n64-modern-runtime librecomp/include/librecomp/mods.hpp librecomp/src/mods.cpp librecomp/src/recomp.cpp ultramodern/src/mesgqueue.cpp librecomp/src/config.cpp
+N64ModernRuntime extern/n64-modern-runtime librecomp/include/librecomp/mods.hpp librecomp/src/mods.cpp librecomp/src/recomp.cpp - ultramodern/src/mesgqueue.cpp librecomp/src/config.cpp
 N64Recomp extern/n64-modern-runtime/N64Recomp"
-stamp="$(git -C $browser rev-parse HEAD) $( (cat patches/manifest.json $(ls patches/web/*.patch 2> /dev/null); echo "$web_patches") | sha1sum | cut -c1-40)"
+stamp="$(git -C $browser rev-parse HEAD) $( (cat patches/manifest.json $(ls patches/web/*.patch 2> /dev/null); echo "$web_merged_from $web_patches") | sha1sum | cut -c1-40)"
 if [[ "$(cat build/web-patched 2> /dev/null)" != "$stamp" ]]; then
     for s in extern/rt64 extern/n64-modern-runtime; do
         git -C $s submodule foreach --recursive -q 'git reset -q --hard && git clean -fdq'
@@ -90,8 +96,11 @@ if [[ "$(cat build/web-patched 2> /dev/null)" != "$stamp" ]]; then
     done
     python3 scripts/apply_dependency_patches.py
     while read -r name checkout skip; do
-        cmake -P $browser/patches/apply.cmake "$name" "$checkout" $skip
+        merged="${skip%%- *}"
+        cmake -P $browser/patches/apply.cmake "$name" "$checkout" ${skip/- /}
         [[ ! -f patches/web/$name.patch ]] || git -C "$checkout" apply --whitespace=nowarn "$root/patches/web/$name.patch"
+        [[ -z "${merged// /}" ]] ||
+            cmake -P $browser/patches/apply.cmake "$name" "$checkout" --since $web_merged_from $merged
     done <<< "$web_patches"
     mkdir -p build && echo "$stamp" > build/web-patched
 fi

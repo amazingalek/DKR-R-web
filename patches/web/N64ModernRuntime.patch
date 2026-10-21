@@ -449,10 +449,23 @@ index ff40212..b9ecf99 100644
      hook_slots.clear();
      processed_hook_slots.clear();
 diff --git a/librecomp/src/recomp.cpp b/librecomp/src/recomp.cpp
-index fc40fc3..f1ad214 100644
+index fc40fc3..954b4c1 100644
 --- a/librecomp/src/recomp.cpp
 +++ b/librecomp/src/recomp.cpp
-@@ -84,7 +84,9 @@ bool recomp::register_game(const recomp::GameEntry& entry) {
+@@ -32,6 +32,12 @@
+ #    include <sys/mman.h>
+ #endif
+ 
++#ifdef __EMSCRIPTEN__
++#    include <fcntl.h>
++#    include <sys/stat.h>
++#    include <unistd.h>
++#endif
++
+ #if defined(_WIN32)
+ #define PATHFMT "%ls"
+ #else
+@@ -84,7 +90,9 @@ bool recomp::register_game(const recomp::GameEntry& entry) {
  }
  
  void recomp::mods::initialize_mods() {
@@ -462,7 +475,7 @@ index fc40fc3..f1ad214 100644
      std::filesystem::create_directories(config_path / mods_directory);
      std::filesystem::create_directories(config_path / mod_config_directory);
      mod_context->set_mods_config_path(config_path / "mods.json");
-@@ -96,6 +98,11 @@ void recomp::mods::register_embedded_mod(const std::string &mod_id, std::span<co
+@@ -96,6 +104,11 @@ void recomp::mods::register_embedded_mod(const std::string &mod_id, std::span<co
      mod_context->register_embedded_mod(mod_id, mod_bytes);
  }
  
@@ -474,3 +487,41 @@ index fc40fc3..f1ad214 100644
  void recomp::mods::scan_mods() {
      std::vector<recomp::mods::ModOpenErrorDetails> mod_open_errors;
      {
+@@ -158,6 +171,29 @@ bool check_hash(const std::vector<uint8_t>& rom_data, uint64_t expected_hash) {
+ static std::vector<uint8_t> read_file(const std::filesystem::path& path) {
+     std::vector<uint8_t> ret;
+ 
++#ifdef __EMSCRIPTEN__
++    // A page's files are in the page's thread's file system, and every read from another thread waits for that thread:
++    // an ifstream reads a ROM there 1 KB at a time, 65,536 round trips for a 64 MB one (0.5 s in Chrome), and the
++    // launcher, which loads the ROM, draws nothing meanwhile. So it is read in 4 MB pieces, a millisecond or two each.
++    int fd = open(path.c_str(), O_RDONLY);
++    struct stat st;
++    if (fd >= 0 && fstat(fd, &st) == 0) {
++        ret.resize(st.st_size);
++        size_t done = 0;
++        while (done < ret.size()) {
++            ssize_t got = read(fd, ret.data() + done, std::min<size_t>(ret.size() - done, 4 << 20));
++            if (got <= 0) {
++                break;
++            }
++            done += got;
++        }
++        ret.resize(done);
++    }
++    if (fd >= 0) {
++        close(fd);
++    }
++    return ret;
++#else
+     std::ifstream file{ path, std::ios::binary};
+ 
+     if (file.good()) {
+@@ -169,6 +205,7 @@ static std::vector<uint8_t> read_file(const std::filesystem::path& path) {
+     }
+ 
+     return ret;
++#endif
+ }
+ 
+ bool write_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {

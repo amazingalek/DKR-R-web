@@ -180,7 +180,7 @@ index 4181a2c..c3d3a00 100644
      }
  
 diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
-index 4e191c2..ea44022 100644
+index 4e191c2..b98b1b2 100644
 --- a/src/hle/rt64_workload_queue.cpp
 +++ b/src/hle/rt64_workload_queue.cpp
 @@ -111,7 +111,11 @@ namespace RT64 {
@@ -218,7 +218,17 @@ index 4e191c2..ea44022 100644
              for (RenderTarget *renderTarget : resizedTargets) {
                  renderFramebufferManager->destroyAllWithRenderTarget(renderTarget);
              }
-@@ -704,7 +717,7 @@ namespace RT64 {
+@@ -638,7 +651,8 @@ namespace RT64 {
+                     drawParams.rtEnabled = workloadConfig.raytracingEnabled;
+                     drawParams.submissionFrame = workload.submissionFrame;
+                     drawParams.deltaTimeMs = deltaTimeMs;
+-                    drawParams.ubershadersOnly = ubershadersOnly;
++                    drawParams.ubershadersOnly = ubershadersOnly || workload.extended.pipelineWarmUp;
++                    drawParams.drawsNothing = workload.extended.pipelineWarmUp;
+                     drawParams.postBlendNoise = workloadConfig.postBlendNoise;
+                     drawParams.postBlendNoiseNegative = workloadConfig.postBlendNoiseNegative;
+                     drawParams.maxGameCall = std::min(gameCallCountMax - gameCallCursor, fbPair.gameCallCount);
+@@ -704,7 +718,7 @@ namespace RT64 {
              ext.workloadGraphicsWorker->commandList->begin();
              ext.workloadGraphicsWorker->commandList->resetQueryPool(queryPool.get(), 0, 2);
              ext.workloadGraphicsWorker->commandList->writeTimestamp(queryPool.get(), 0);
@@ -227,7 +237,17 @@ index 4e191c2..ea44022 100644
              framebufferRenderer->recordSetup(ext.workloadGraphicsWorker, bufferUploaders, processRSP ? rspProcessor.get() : nullptr, processWorldVertices ? vertexProcessor.get() : nullptr, &workload.outputBuffers, workloadConfig.raytracingEnabled);
              
              // Record all framebuffer pairs.
-@@ -905,6 +918,12 @@ namespace RT64 {
+@@ -891,6 +905,9 @@ namespace RT64 {
+         uint32_t displayRateForTicks = 0;
+         int processCursor = -1;
+         bool frameReduction = false;
++        GameFrame offscreenFrame;
++        bool lastWorkloadOffscreen = false;
++        bool barrierHeld = false;
+         while (threadsRunning) {
+             {
+                 std::unique_lock<std::mutex> cursorLock(cursorMutex);
+@@ -905,6 +922,12 @@ namespace RT64 {
              }
  
              if (processCursor >= 0) {
@@ -240,6 +260,191 @@ index 4e191c2..ea44022 100644
                  std::unique_lock<std::mutex> threadLock(threadMutex);
                  Workload &workload = workloads[processCursor];
                  ext.presentQueue->waitForPresentId(workload.presentId);
+@@ -917,22 +940,36 @@ namespace RT64 {
+                 workloadProfiler.start();
+                 threadConfigurationUpdate(workload.viFbSize, workloadConfig);
+ 
++                // With RT64_OFFSCREEN_WORKLOADS a workload that draws only offscreen (Workload::offscreenOnly) is a pass of the
++                // game frame the next workload draws, as when a game draws its shadows' render targets in a display list of
++                // their own before the frame's. It's drawn, but it isn't a frame: the next one is matched against the frame
++                // before it, and the present's framebuffers and interpolated frames stay that frame's. Otherwise each workload
++                // is a frame, and the frame after such a pass matched nothing and was never interpolated. One pass at most
++                // between two frames: the frame before stays out of the writer's reach until the next frame is drawn (the
++                // barrier), and the queue holds two more workloads for it (WORKLOAD_QUEUE_SIZE).
++#           if RT64_OFFSCREEN_WORKLOADS
++                const bool offscreenPass = workload.offscreenOnly && !workload.paused && !lastWorkloadOffscreen && !gameFrames[curFrameIndex].workloads.empty();
++#           else
++                const bool offscreenPass = false;
++#           endif
++                lastWorkloadOffscreen = offscreenPass;
++
+                 // FIXME: This is a very hacky way to find out if we need to advance the frame if the workload was paused for the first time.
+-                if (!workload.paused || (!gameFrames[curFrameIndex].workloads.empty() && (gameFrames[curFrameIndex].workloads[0] != (uint32_t)processCursor))) {
++                if (!offscreenPass && (!workload.paused || (!gameFrames[curFrameIndex].workloads.empty() && (gameFrames[curFrameIndex].workloads[0] != (uint32_t)processCursor)))) {
+                     prevFrameIndex = curFrameIndex;
+                     curFrameIndex = (curFrameIndex + 1) % gameFrames.size();
+                 }
+                 
+                 // TODO: The frame detection needs to be more elaborate than just matching one workload to one frame.
+-                GameFrame &curFrame = gameFrames[curFrameIndex];
+-                const GameFrame &prevFrame = gameFrames[prevFrameIndex];
++                GameFrame &curFrame = offscreenPass ? offscreenFrame : gameFrames[curFrameIndex];
++                const GameFrame &prevFrame = offscreenPass ? offscreenFrame : gameFrames[prevFrameIndex];
+                 uint32_t workloadIndex = processCursor;
+                 curFrame.set(*this, &workloadIndex, 1);
+ 
+                 // Detect the color image to interpolate for this workload.
+                 RenderTargetKey interpolationTargetKey;
+                 int32_t interpolationTargetFbPairIndex = -1;
+-                {
++                if (!offscreenPass) {
+                     std::scoped_lock<std::mutex> managerLock(ext.sharedResources->managerMutex);
+                     FramebufferManager &fbManager = ext.sharedResources->framebufferManager;
+                     std::vector<uint32_t> &colorVector = ext.sharedResources->colorImageAddressVector;
+@@ -988,7 +1025,7 @@ namespace RT64 {
+                 float prevFrameWeight = 0.0f;
+                 float curFrameWeight = 1.0f;
+                 float deltaTimeMs = 1.0f / 30.0f;
+-                const bool requiresFrameMatching = (workloadConfig.targetRate > 0) || workloadConfig.raytracingEnabled;
++                const bool requiresFrameMatching = !offscreenPass && ((workloadConfig.targetRate > 0) || workloadConfig.raytracingEnabled);
+                 bool generateInterpolatedFrames = false;
+                 bool velocityUploaderUsed = false;
+                 bool tileInterpolationUsed = false;
+@@ -1037,7 +1074,7 @@ namespace RT64 {
+                 
+                 // Get the current and previous set of frame counters. The other set can be in use by the present queue. Skip if no new present event has arrived before this workload event.
+                 InterpolatedFrameCounters &prevFrameCounters = ext.sharedResources->interpolatedFrames[ext.sharedResources->interpolatedFramesIndex];
+-                const bool useDifferentCounters = (lastPresentId != workload.presentId);
++                const bool useDifferentCounters = !offscreenPass && (lastPresentId != workload.presentId);
+                 if (useDifferentCounters) {
+                     ext.sharedResources->interpolatedFramesIndex = ext.sharedResources->interpolatedFramesIndex ^ 1;
+                     lastPresentId = workload.presentId;
+@@ -1052,16 +1089,26 @@ namespace RT64 {
+                 }
+ 
+                 InterpolatedFrameCounters &curFrameCounters = ext.sharedResources->interpolatedFrames[ext.sharedResources->interpolatedFramesIndex];
+-                curFrameCounters.skipped = false;
+-                curFrameCounters.presented = 0;
+-                curFrameCounters.available = 0;
+-                curFrameCounters.count = displayFrames;
++                if (!offscreenPass) {
++                    curFrameCounters.skipped = false;
++                    curFrameCounters.presented = 0;
++                    curFrameCounters.available = 0;
++                    curFrameCounters.count = displayFrames;
++                }
+ 
+                 // Create as many render targets as required to store the interpolated targets.
+                 auto &interpolatedTargets = ext.sharedResources->interpolatedColorTargets;
+                 const bool usingMSAA = (ext.sharedResources->renderTargetManager.multisampling.sampleCount > 1);
+                 const bool usesHDR = ext.sharedResources->renderTargetManager.usesHDR;
+                 uint32_t requiredFrames = (usingMSAA && generateInterpolatedFrames) ? displayFrames : (displayFrames - 1);
++#           if defined(__EMSCRIPTEN__)
++                // At most InterpolatedTargetSlots targets, used in turn: a frame past them waits for the frame drawn into its
++                // target to be presented. RT64 keeps a target for every display frame of a game frame and never frees one,
++                // so a page held as many as the slowest game frame of the visit took display frames: GoldenEye's targets
++                // are 5702x2970 (68 MB) at a 3840x2000 canvas, and ?uncapped (360 Hz) in Dam at ~8 fps kept 42 of them,
++                // 2.8 GB, until Firefox's device ran out of memory. At 60 Hz a game frame takes more only below 7.5 fps.
++                requiredFrames = std::min(requiredFrames, InterpolatedTargetSlots);
++#           endif
+                 if ((requiredFrames > 0) && (interpolatedTargets.size() < requiredFrames)) {
+                     uint32_t previousSize = uint32_t(interpolatedTargets.size());
+                     interpolatedTargets.resize(requiredFrames);
+@@ -1078,6 +1125,15 @@ namespace RT64 {
+                 bool skipWorkloadNow = false;
+                 uint32_t targetIndex = 0;
+                 uint32_t framesRendered = 0;
++                auto newerWorkloadQueued = [&]() {
++                    std::scoped_lock<std::mutex> cursorLock(cursorMutex);
++                    bool newer = (writeCursor != threadCursor);
++#               if RT64_OFFSCREEN_WORKLOADS
++                    // An offscreen pass alone is the start of the next frame, not the frame: these frames go on.
++                    newer = newer && !(workloads[threadCursor].offscreenOnly && (int((threadCursor + 1) % workloads.size()) == writeCursor));
++#               endif
++                    return newer;
++                };
+                 int64_t renderTimeTotalMicro = 0;
+                 for (uint32_t frame = 0; (frame < displayFrames) && !skipWorkloadNow; frame++) {
+                     // Evaluate if this frame should be skipped. Measure the current time and compare it to what frame is estimated should be have been rendered by now.
+@@ -1101,15 +1157,43 @@ namespace RT64 {
+ 
+                         // Override the render target.
+                         if (usingMSAA || (frame > 0)) {
+-                            overrideTarget = interpolatedTargets[targetIndex].get();
+-                            overrideModifier = (targetIndex + 1);
++                            // The targets are used in turn when there are fewer than the frames (InterpolatedTargetSlots).
++                            const uint32_t targetSlots = uint32_t(interpolatedTargets.size());
++                            const uint32_t targetSlot = targetIndex % targetSlots;
++                            overrideTarget = interpolatedTargets[targetSlot].get();
++                            overrideModifier = (targetSlot + 1);
++
++#                       if defined(__EMSCRIPTEN__)
++                            if (targetIndex >= targetSlots) {
++                                // Wait until this workload's own frame drawn into the target has been presented, unless a newer
++                                // workload is waiting: then the rest of this one's frames are skipped, as they are after a frame.
++                                std::unique_lock<std::mutex> interpolatedLock(ext.sharedResources->interpolatedMutex);
++                                while ((curFrameCounters.presented <= (targetIndex - targetSlots)) && !skipWorkloadNow) {
++                                    ext.sharedResources->interpolatedCondition.wait_for(interpolatedLock, std::chrono::milliseconds(5));
++                                    if (curFrameCounters.presented <= (targetIndex - targetSlots)) {
++                                        interpolatedLock.unlock();
++                                        skipWorkloadNow = newerWorkloadQueued();
++                                        interpolatedLock.lock();
++                                    }
++                                }
++
++                                if (skipWorkloadNow) {
++                                    curFrameCounters.skipped = true;
++                                    interpolatedLock.unlock();
++                                    displayTicks += workload.viOriginalRate * (displayFrames - (frame + 1));
++                                    ext.sharedResources->interpolatedCondition.notify_all();
++                                    continue;
++                                }
++                            }
++#                       endif
+ 
+-                            if (useDifferentCounters && (prevFrameCounters.available > 0) && (targetIndex < prevFrameCounters.available)) {
++                            if (useDifferentCounters && (prevFrameCounters.available > targetSlot)) {
+                                 // Wait until the target has finished presenting if the alternate frame counter (used by the present queue) is making use of this target.
++                                const uint32_t prevTargetIndex = targetSlot + ((prevFrameCounters.available - 1 - targetSlot) / targetSlots) * targetSlots;
+                                 std::unique_lock<std::mutex> interpolatedLock(ext.sharedResources->interpolatedMutex);
+                                 ext.sharedResources->interpolatedCondition.wait(interpolatedLock, [&]() {
+-                                    frameReduction = frameReduction || (prevFrameCounters.presented <= targetIndex);
+-                                    return prevFrameCounters.presented > targetIndex;
++                                    frameReduction = frameReduction || (prevFrameCounters.presented <= prevTargetIndex);
++                                    return prevFrameCounters.presented > prevTargetIndex;
+                                 });
+                             }
+ 
+@@ -1145,10 +1229,7 @@ namespace RT64 {
+ 
+                     // For every additional frame, we increase the frames available and notify the present queue.
+                     if (generateInterpolatedFrames && (usingMSAA || (frame > 0))) {
+-                        {
+-                            std::scoped_lock<std::mutex> cursorLock(cursorMutex);
+-                            skipWorkloadNow = ((frame + 1) < displayFrames) && (writeCursor != threadCursor);
+-                        }
++                        skipWorkloadNow = ((frame + 1) < displayFrames) && newerWorkloadQueued();
+ 
+                         {
+                             std::scoped_lock<std::mutex> managerLock(ext.sharedResources->interpolatedMutex);
+@@ -1179,7 +1260,16 @@ namespace RT64 {
+ 
+                 threadConfigurationValidate();
+ 
+-                if (!workload.paused) {
++                // The barrier stays on the frame before an offscreen pass, and catches up once the next frame is drawn.
++                if (offscreenPass) {
++                    barrierHeld = true;
++                }
++                else if (!workload.paused) {
++                    if (barrierHeld) {
++                        threadAdvanceBarrier();
++                        barrierHeld = false;
++                    }
++
+                     threadAdvanceBarrier();
+                 }
+ 
 diff --git a/src/render/rt64_generated_mip_config.h b/src/render/rt64_generated_mip_config.h
 index 27659ec..3b8d1cd 100644
 --- a/src/render/rt64_generated_mip_config.h
@@ -837,10 +1042,18 @@ index a370263..ccb7599 100644
          }
  
 diff --git a/src/shaders/RasterPS.hlsl b/src/shaders/RasterPS.hlsl
-index 9b495ed..1a4e104 100644
+index 9b495ed..1e76c38 100644
 --- a/src/shaders/RasterPS.hlsl
 +++ b/src/shaders/RasterPS.hlsl
-@@ -45,9 +45,51 @@ float sampleBackgroundDepth(int2 pixelPos, uint sampleCount) {
+@@ -5,6 +5,7 @@
+ #include "shared/rt64_blender.h"
+ #include "shared/rt64_color_combiner.h"
+ #include "shared/rt64_raster_params.h"
++#include "RasterRenderIndex.hlsli"
+ 
+ #include "Depth.hlsli"
+ #include "FbRendererCommon.hlsli"
+@@ -45,9 +46,79 @@ float sampleBackgroundDepth(int2 pixelPos, uint sampleCount) {
  }
  #endif
  
@@ -879,6 +1092,34 @@ index 9b495ed..1a4e104 100644
 +}
 +#endif
 +
++#if defined(WEBGPU) && defined(PER_DRAW_TEXTURES)
++// Samples texture 0 or 1 (t) as the two blocks below RasterPS's #else do. With mip LOD the tiles are picked per pixel,
++// so each tile's texture slot is a switch anyway (TextureSampler.hlsli), and RasterPS samples both in a loop the shader
++// keeps, which leaves sampleTexture() in it once: most of a prebuilt pixel shader with mip LOD. Without LOD a specialized
++// shader knows each tile's slot and clamp modes only if it samples them apart, as two calls (one of Majora's Mask's
++// with two tiles is 10 KB of WGSL that way, 60 in the loop). The ubershader always loops, and so does the spec constant
++// shader the browser specializes (SPEC_CONSTANT_LOOPS). Firefox 158 builds a section's pipelines one at a time while
++// the game waits, and in a test page built GoldenEye's Dam in 5.8-8.3 s against 14.8-19.1, Pilotwings 64's menus in
++// 5.7-8.2 against 13.9-16.3 and Conker's Windy in 4.1-4.4 against 6.3-8.4 (RTX 2070, three runs each, interleaved, a
++// busy host).
++float4 sampleDrawTile(uint t, OtherMode otherMode, RenderFlags flags, int tileIndex0, int tileIndex1, float2 lowResUV, float2 highResUV, float2 ddxUV, float2 ddyUV) {
++    const bool oneCycleHardwareBug = (otherMode.cycleType() == G_CYC_1CYCLE);
++    const bool firstTile = (t == 0) || oneCycleHardwareBug;
++    const uint tileIndex = firstTile ? tileIndex0 : tileIndex1;
++    const uint globalTileIndex = instanceRenderIndices[RENDER_INDEX].rdpTileIndex + tileIndex;
++    RDPTile rdpTile = RDPTiles[globalTileIndex];
++    if (!renderFlagDynamicTiles(flags)) {
++        rdpTile.cms = firstTile ? renderCMS0(flags) : renderCMS1(flags);
++        rdpTile.cmt = firstTile ? renderCMT0(flags) : renderCMT1(flags);
++        rdpTile.nativeSampler = firstTile ? renderFlagNativeSampler0(flags) : renderFlagNativeSampler1(flags);
++    }
++
++    const GPUTile gpuTile = drawGPUTile(instanceRenderIndices[RENDER_INDEX].rdpTileIndex, tileIndex);
++    const float2 textureUV = gpuTileFlagHighRes(gpuTile.flags) ? highResUV : lowResUV;
++    return sampleTexture(otherMode, flags, textureUV, ddxUV, ddyUV, rdpTile, gpuTile, (t == 1) && oneCycleHardwareBug);
++}
++#endif
++
  LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float2 vertexUV, float4 vertexSmoothColor, float4 vertexFlatColor,
      bool isFrontFace, out float4 resultColor, out float4 resultAlpha) 
  {
@@ -892,7 +1133,16 @@ index 9b495ed..1a4e104 100644
      const OtherMode otherMode = { rp.omL, rp.omH };
  #if defined(DYNAMIC_RENDER_PARAMS)
      if ((otherMode.cycleType() != G_CYC_COPY) && renderFlagCulling(rp.flags) && isFrontFace) {
-@@ -89,37 +131,51 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+@@ -55,7 +126,7 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+     }
+ #endif
+     
+-    const uint instanceIndex = instanceRenderIndices[gConstants.renderIndex].instanceIndex;
++    const uint instanceIndex = instanceRenderIndices[RENDER_INDEX].instanceIndex;
+     const float4 vertexColor = renderFlagSmoothShade(rp.flags) ? vertexSmoothColor : float4(vertexFlatColor.rgb, vertexSmoothColor.a);
+     const ColorCombiner colorCombiner = { rp.ccL, rp.ccH };
+     const bool depthClampNear = renderFlagNoN(rp.flags);
+@@ -89,37 +160,51 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
      }
  
      if (depthDecal) {
@@ -954,14 +1204,63 @@ index 9b495ed..1a4e104 100644
      int tileIndex0 = 0;
      int tileIndex1 = 1;
      float lodFraction;
-@@ -141,14 +197,15 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+@@ -128,12 +213,46 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+         lodScale = FbParams.resolutionScale.y;
+     }
+     
+-    computeLOD(otherMode, instanceRenderIndices[gConstants.renderIndex].rdpTileCount, instanceRDPParams[instanceIndex].primLOD, lodScale, ddxVertexUV, ddyVertexUV, tileIndex0, tileIndex1, lodFraction);
++    computeLOD(otherMode, instanceRenderIndices[RENDER_INDEX].rdpTileCount, instanceRDPParams[instanceIndex].primLOD, lodScale, ddxVertexUV, ddyVertexUV, tileIndex0, tileIndex1, lodFraction);
+ 
+     float4 texVal0 = float4(0.0f, 0.0f, 0.0f, 1.0f);
+     float4 texVal1 = float4(0.0f, 0.0f, 0.0f, 1.0f);
++#if defined(WEBGPU) && defined(PER_DRAW_TEXTURES)
++    // The tiles in a loop or apart: sampleDrawTile() says when.
++    const bool usesTexture0 = renderFlagUsesTexture0(rp.flags);
++    const bool usesTexture1 = renderFlagUsesTexture1(rp.flags);
++    const bool loopTiles = usesTexture0 && usesTexture1 && (otherMode.textLOD() == G_TL_LOD);
++#if !defined(DYNAMIC_RENDER_PARAMS) && !defined(SPEC_CONSTANT_LOOPS)
++    if (!loopTiles) {
++        if (usesTexture0) {
++            texVal0 = sampleDrawTile(0, otherMode, rp.flags, tileIndex0, tileIndex1, lowResUV, highResUV, ddxVertexUV, ddyVertexUV);
++        }
++
++        if (usesTexture1) {
++            texVal1 = sampleDrawTile(1, otherMode, rp.flags, tileIndex0, tileIndex1, lowResUV, highResUV, ddxVertexUV, ddyVertexUV);
++        }
++    }
++    else
++#endif
++    {
++        [loop]
++        for (uint t = 0; t < 2; t++) {
++            if (!((t == 0) ? usesTexture0 : usesTexture1)) {
++                continue;
++            }
++
++            const float4 texVal = sampleDrawTile(t, otherMode, rp.flags, tileIndex0, tileIndex1, lowResUV, highResUV, ddxVertexUV, ddyVertexUV);
++            if (t == 0) {
++                texVal0 = texVal;
++            }
++            else {
++                texVal1 = texVal;
++            }
++        }
++    }
++#else
+     if (renderFlagUsesTexture0(rp.flags)) {
+-        const uint globalTileIndex = instanceRenderIndices[gConstants.renderIndex].rdpTileIndex + tileIndex0;
++        const uint globalTileIndex = instanceRenderIndices[RENDER_INDEX].rdpTileIndex + tileIndex0;
+         RDPTile rdpTile = RDPTiles[globalTileIndex];
+         if (!renderFlagDynamicTiles(rp.flags)) {
+             rdpTile.cms = renderCMS0(rp.flags);
+@@ -141,14 +260,15 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
              rdpTile.nativeSampler = renderFlagNativeSampler0(rp.flags);
          }
          
 -        const GPUTile gpuTile = GPUTiles[globalTileIndex];
 -        const float2 textureUV = gpuTileFlagHighRes(gpuTile.flags) ? vertexUV : lowResUV;
 -        texVal0 = sampleTexture(otherMode, rp.flags, textureUV, ddxVertexUV, ddyVertexUV, rdpTile, gpuTile, false, gConstants.mipLODBias, gConstants.generatedMipmaps != 0);
-+        const GPUTile gpuTile = drawGPUTile(instanceRenderIndices[gConstants.renderIndex].rdpTileIndex, tileIndex0);
++        const GPUTile gpuTile = drawGPUTile(instanceRenderIndices[RENDER_INDEX].rdpTileIndex, tileIndex0);
 +        const float2 textureUV = gpuTileFlagHighRes(gpuTile.flags) ? highResUV : lowResUV;
 +        texVal0 = sampleTexture(otherMode, rp.flags, textureUV, ddxVertexUV, ddyVertexUV, rdpTile, gpuTile, false);
      }
@@ -970,25 +1269,29 @@ index 9b495ed..1a4e104 100644
          const bool oneCycleHardwareBug = (otherMode.cycleType() == G_CYC_1CYCLE);
 -        const uint globalTileIndex = instanceRenderIndices[gConstants.renderIndex].rdpTileIndex + (oneCycleHardwareBug ? tileIndex0 : tileIndex1);
 +        const uint tileIndex = oneCycleHardwareBug ? tileIndex0 : tileIndex1;
-+        const uint globalTileIndex = instanceRenderIndices[gConstants.renderIndex].rdpTileIndex + tileIndex;
++        const uint globalTileIndex = instanceRenderIndices[RENDER_INDEX].rdpTileIndex + tileIndex;
          RDPTile rdpTile = RDPTiles[globalTileIndex];
          if (!renderFlagDynamicTiles(rp.flags)) {
              rdpTile.cms = oneCycleHardwareBug ? renderCMS0(rp.flags) : renderCMS1(rp.flags);
-@@ -156,10 +213,10 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+@@ -156,12 +276,13 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
              rdpTile.nativeSampler = oneCycleHardwareBug ? renderFlagNativeSampler0(rp.flags) : renderFlagNativeSampler1(rp.flags);
          }
          
 -        const GPUTile gpuTile = GPUTiles[globalTileIndex];
 -        const float2 textureUV = gpuTileFlagHighRes(gpuTile.flags) ? vertexUV : lowResUV;
-+        const GPUTile gpuTile = drawGPUTile(instanceRenderIndices[gConstants.renderIndex].rdpTileIndex, tileIndex);
++        const GPUTile gpuTile = drawGPUTile(instanceRenderIndices[RENDER_INDEX].rdpTileIndex, tileIndex);
 +        const float2 textureUV = gpuTileFlagHighRes(gpuTile.flags) ? highResUV : lowResUV;
          const uint nativeSampler = renderFlagNativeSampler1(rp.flags);
 -        texVal1 = sampleTexture(otherMode, rp.flags, textureUV, ddxVertexUV, ddyVertexUV, rdpTile, gpuTile, oneCycleHardwareBug, gConstants.mipLODBias, gConstants.generatedMipmaps != 0);
 +        texVal1 = sampleTexture(otherMode, rp.flags, textureUV, ddxVertexUV, ddyVertexUV, rdpTile, gpuTile, oneCycleHardwareBug);
      }
-     
+-    
++#endif
++
      // Color combiner.
-@@ -254,6 +311,14 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+     float4 shadeColor = vertexColor;
+     float4 combinerColor;
+@@ -254,8 +375,16 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
          resultColor.a = resultCvg;
      }
      
@@ -1001,9 +1304,27 @@ index 9b495ed..1a4e104 100644
 +#endif
 +
      // Add highlight color to the last step.
-     uint highlightColorUint = instanceRenderIndices[gConstants.renderIndex].highlightColor;
+-    uint highlightColorUint = instanceRenderIndices[gConstants.renderIndex].highlightColor;
++    uint highlightColorUint = instanceRenderIndices[RENDER_INDEX].highlightColor;
      if (highlightColorUint > 0) {
-@@ -290,8 +355,15 @@ void PSMain(
+         float4 highlightColor = RGBA32ToFloat4(highlightColorUint);
+         resultColor = lerp(resultColor, highlightColor, highlightColor.a);
+@@ -272,7 +401,7 @@ LIBRARY_EXPORT bool RasterPS(const RenderParams rp, float4 vertexPosition, float
+ 
+ #if defined(DYNAMIC_RENDER_PARAMS)
+ RenderParams getRenderParams() {
+-    uint instanceIndex = instanceRenderIndices[gConstants.renderIndex].instanceIndex;
++    uint instanceIndex = instanceRenderIndices[RENDER_INDEX].instanceIndex;
+     return DynamicRenderParams[instanceIndex];
+ }
+ #elif defined(SPEC_CONSTANT_RENDER_PARAMS)
+@@ -287,13 +416,26 @@ void PSMain(
+ #if defined(DYNAMIC_RENDER_PARAMS) || defined(VERTEX_FLAT_COLOR)
+     , nointerpolation in float4 vertexFlatColor : COLOR1
+ #endif
++#ifdef RT64_RENDER_INDEX_BY_INSTANCE
++    , nointerpolation in uint vertexRenderIndex : RENDERINDEX
++#endif
  #if defined(DYNAMIC_RENDER_PARAMS)
      , bool isFrontFace : SV_IsFrontFace
  #endif
@@ -1018,8 +1339,13 @@ index 9b495ed..1a4e104 100644
 +#endif
  )
  {
++#ifdef RT64_RENDER_INDEX_BY_INSTANCE
++    gRenderIndex = vertexRenderIndex;
++#endif
  #if !defined(DYNAMIC_RENDER_PARAMS)
-@@ -308,6 +380,11 @@ void PSMain(
+ #if !defined(VERTEX_FLAT_COLOR)
+     float4 vertexFlatColor = 0.0f;
+@@ -308,6 +450,11 @@ void PSMain(
      }
  
      pixelColor = resultColor;
@@ -1034,10 +1360,19 @@ index 9b495ed..1a4e104 100644
 +#endif
 \ No newline at end of file
 diff --git a/src/shaders/TextureSampler.hlsli b/src/shaders/TextureSampler.hlsli
-index 45ea243..5b2b8d9 100644
+index 45ea243..a5cfa5a 100644
 --- a/src/shaders/TextureSampler.hlsli
 +++ b/src/shaders/TextureSampler.hlsli
-@@ -24,6 +24,88 @@
+@@ -18,12 +18,96 @@
+ // We prefer using for loops to reduce the size of the final ubershader as much as possible.
+ // When using specialized shaders, we prefer to unroll the loop manually to give re-spirv an
+ // easier time to eliminate dead code, as its graph model can't handle the loop constructs yet.
+-#ifdef DYNAMIC_RENDER_PARAMS
++// A WGSL build's spec constant shaders, which the browser specializes with override values and nothing strips of dead
++// code beforehand, keep the loops too (SPEC_CONSTANT_LOOPS, CMakeLists.txt).
++#if defined(DYNAMIC_RENDER_PARAMS) || defined(SPEC_CONSTANT_LOOPS)
+ #define USE_FOR_LOOPS 1
+ #else
  #define USE_FOR_LOOPS 0
  #endif
  
@@ -1126,7 +1461,7 @@ index 45ea243..5b2b8d9 100644
  void computeLOD(OtherMode otherMode, uint rdpTileCount, float2 primLOD, float resLodScale, float2 ddxUV, float2 ddyUV, inout int tileIndex0, inout int tileIndex1, out float lodFraction) {
      const bool usesLOD = (otherMode.textLOD() == G_TL_LOD);
      if (usesLOD) {
-@@ -71,26 +153,8 @@ void computeLOD(OtherMode otherMode, uint rdpTileCount, float2 primLOD, float re
+@@ -71,26 +155,8 @@ void computeLOD(OtherMode otherMode, uint rdpTileCount, float2 primLOD, float re
      }
  }
  
@@ -1155,7 +1490,7 @@ index 45ea243..5b2b8d9 100644
      if (rdpTile.cms & G_TX_CLAMP) {
          texelInt.x = clamp(texelInt.x, 0, (round(tcScale.x * rdpTile.lrs) / 4) - (round(tcScale.x * rdpTile.uls) / 4) + round(tcScale.x - 1.0f));
      }
-@@ -116,24 +180,45 @@ float4 clampWrapMirrorSample(const RDPTile rdpTile, const GPUTile gpuTile, float
+@@ -116,24 +182,45 @@ float4 clampWrapMirrorSample(const RDPTile rdpTile, const GPUTile gpuTile, float
      }
      
      // Allows selection of only particular columns or rows as defined by the tile.
@@ -1205,7 +1540,7 @@ index 45ea243..5b2b8d9 100644
      // Choose the native sampler that was determined to be compatible.
      switch (nativeSampler) {
          case NATIVE_SAMPLER_WRAP_WRAP:
-@@ -157,13 +242,62 @@ float4 sampleTextureNative(Texture2D texture, uint nativeSampler, int2 texelBase
+@@ -157,13 +244,62 @@ float4 sampleTextureNative(Texture2D texture, uint nativeSampler, int2 texelBase
              return texture.SampleLevel(gNearestClampClampSampler, nativeUVCoord, 0.0f);
      }
  }
@@ -1271,7 +1606,7 @@ index 45ea243..5b2b8d9 100644
      tcScale /= mipScale;
      
      int2 texelBaseInt = floor(uvCoord);
-@@ -171,6 +305,40 @@ float4 sampleTextureLevel(const RDPTile rdpTile, const GPUTile gpuTile, bool fil
+@@ -171,6 +307,40 @@ float4 sampleTextureLevel(const RDPTile rdpTile, const GPUTile gpuTile, bool fil
      float4 samples[4];
      const uint nativeSampler = rdpTile.nativeSampler;
      bool gpuTileUsesTMEM = canDecodeTMEM && gpuTileFlagRawTMEM(gpuTile.flags);
@@ -1312,7 +1647,7 @@ index 45ea243..5b2b8d9 100644
      if ((nativeSampler == NATIVE_SAMPLER_NONE) || gpuTileUsesTMEM) {
  #if USE_FOR_LOOPS
          int numSamples = select_uint(filtering, 4, 1);
-@@ -189,23 +357,23 @@ float4 sampleTextureLevel(const RDPTile rdpTile, const GPUTile gpuTile, bool fil
+@@ -189,23 +359,23 @@ float4 sampleTextureLevel(const RDPTile rdpTile, const GPUTile gpuTile, bool fil
  #endif
      }
      else {
@@ -1342,7 +1677,7 @@ index 45ea243..5b2b8d9 100644
      
      float4 sample00 = samples[0];
      if (filtering) {
-@@ -235,7 +403,7 @@ float4 sampleTextureLevel(const RDPTile rdpTile, const GPUTile gpuTile, bool fil
+@@ -235,7 +405,7 @@ float4 sampleTextureLevel(const RDPTile rdpTile, const GPUTile gpuTile, bool fil
      }
  }
  
@@ -1351,7 +1686,7 @@ index 45ea243..5b2b8d9 100644
      const bool texturePerspective = (otherMode.textPersp() == G_TP_PERSP);
      const bool applyCorrection = (!texturePerspective && !renderFlagRect(renderFlags));
  
-@@ -284,23 +452,7 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
+@@ -284,23 +454,7 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
      const bool canDecodeTMEM = renderFlagCanDecodeTMEM(renderFlags);
      const bool usesHDR = renderFlagUsesHDR(renderFlags);
      const uint nativeSampler = rdpTile.nativeSampler;
@@ -1376,7 +1711,7 @@ index 45ea243..5b2b8d9 100644
      uint numRDPSamples = 0;
      uint RDPMipLevels[2];
      RDPMipLevels[0] = 0;
-@@ -309,50 +461,25 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
+@@ -309,50 +463,25 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
  
      // Determine the RDP sample count and mip levels.
      if (flagHasMipmaps) {
@@ -1434,7 +1769,7 @@ index 45ea243..5b2b8d9 100644
          }
      }
      else {
-@@ -395,4 +522,4 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
+@@ -395,4 +524,4 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
      }
      
      return textureColor;
@@ -1442,10 +1777,27 @@ index 45ea243..5b2b8d9 100644
 +}
 \ No newline at end of file
 diff --git a/src/shared/rt64_raster_params.h b/src/shared/rt64_raster_params.h
-index ac6431c..47538b8 100644
+index ac6431c..fb7b55b 100644
 --- a/src/shared/rt64_raster_params.h
 +++ b/src/shared/rt64_raster_params.h
-@@ -13,10 +13,14 @@ namespace interop {
+@@ -6,6 +6,16 @@
+ 
+ #include "shared/rt64_hlsl.h"
+ 
++// A WGSL build gives each raster draw its index into instanceRenderIndices as the draw's first instance, which RasterVS
++// reads as SV_InstanceID (WGSL's instance_index counts from it) and hands the pixel shaders as a flat varying
++// (RasterRenderIndex.hlsli), and leaves renderIndex 0: the push constants are then the same block draw after draw, which
++// plume's WebGPU backend binds once in a pass, where a block a draw was a slot of its ring and a setBindGroup on the
++// page's thread each. Defined here, beside the block, so that the renderer and the shaders follow the same header: a
++// build with its own copy of this file draws by renderIndex in both.
++#if (defined(HLSL_CPU) && defined(RT64_WGSL)) || (!defined(HLSL_CPU) && defined(WEBGPU))
++#   define RT64_RENDER_INDEX_BY_INSTANCE
++#endif
++
+ #ifdef HLSL_CPU
+ namespace interop {
+ #endif
+@@ -13,10 +23,14 @@ namespace interop {
          uint renderIndex;
          float mipLODBias;
          uint generatedMipmaps;

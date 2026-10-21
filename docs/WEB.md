@@ -32,7 +32,9 @@ unchanged.
 1. The pinned dependencies the page needs, fetched by `scripts/bootstrap_dependencies.py`.
 2. DKR-R's own patches to them (`scripts/apply_dependency_patches.py`), then N64Recomp-browser's web patches on top
    (`lib/N64Recomp-browser/patches/apply.cmake`, project by project). Where the two change the same lines,
-   `apply.cmake` leaves those files out and `patches/web/<project>.patch` makes the web's change on top of DKR-R's;
+   `apply.cmake` leaves those files out and `patches/web/<project>.patch` makes the web's change on top of DKR-R's,
+   merged from the N64Recomp-browser commit the script's `web_merged_from` names, and `apply.cmake --since` merges in
+   what the web has changed in them since (a change that meets DKR-R's lines stops the build, for a merge by hand);
    where a stage of DKR-R's own (`runtime-recomp/cmake/StagedPatch.cmake`) meets the web's lines,
    `patches/web/stage/<stage>.patch` is that stage written on top of them.
 3. N64Recomp built natively from the patched checkout: its `funcs.h` declares every function the recompiled code
