@@ -1,0 +1,44 @@
+{
+  "header": [
+    "Diddy Kong Racing's extended plan for N64Recomp-browser's tools/play_page.mjs, at most 5 minutes with every timeout",
+    "counted, for when a longer play than the regular one (web/play_plan.json) is needed: the launcher, Load ROM 6 s after",
+    "it is up (the page starts RT64 only once it has the ROM, so the launcher builds no shaders and says nothing to wait",
+    "for), the logos to the title (shader_survey.js's titleReached(), a need), the menus to a new Adventure as a player",
+    "picks it (Enter, then A until the game is in Timber's Island, a need that the game is playing there) and the hub",
+    "driven about 15 s (roam()). Then three races in other worlds, reached the way the game's own teleport to Future Fun",
+    "Land loads a map (go(), since a player gets to them only by winning the races before; each a need that the map loaded",
+    "with its racers), driven toward each checkpoint: maps 5 and 13 about 30 s, in Dino Domain and Snowflake Mountain, and",
+    "map 10 about 20 s, in Sherbet Island."
+  ],
+  "page": "DKR-R.html",
+  "load": [
+    ["wait", 6000]
+  ],
+  "setup": [
+    ["rom", 628, 322],
+    ["wait", 3000]
+  ],
+  "start": [
+    ["click", 628, 322],
+    ["evalFile", "shader_survey.js"],
+    ["need", "titleReached(20000)"]
+  ],
+  "play": [
+    ["wait", 3000],
+    ["shot", "title.png"],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 8000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 5000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 5000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 5000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 5000],
+    ["need", "(() => { const s = dkrState(); return s.mode === 0 && !s.loading && s; })()"],
+    ["eval", "roam(15)"],
+    ["shot", "timber.png"],
+    ["need", "go(5, 30).then((s) => /^map 5: [2-9] racers/.test(s) && s)"],
+    ["shot", "dino.png"],
+    ["need", "go(13, 30).then((s) => /^map 13: [2-9] racers/.test(s) && s)"],
+    ["shot", "snowflake.png"],
+    ["need", "go(10, 20).then((s) => /^map 10: [2-9] racers/.test(s) && s)"],
+    ["shot", "sherbet.png"]
+  ]
+}

@@ -87,6 +87,12 @@ headless Chrome through `web/shader_plan.json`, a page load per map, in which `w
 the map through its own teleport and drives the player's kart toward each checkpoint. The game's AI can't drive the
 player's kart instead: DKR-R's display list check then rejects every frame. A recording takes about 50 minutes.
 
+`web/play_plan.json` is the page's regular play, 2-3 minutes with every timeout counted, which N64Recomp-browser's
+`tools/play_page.mjs` plays to measure the page: the menus to a new Adventure and Timber's Island, then a race in Dino Domain by the
+survey's teleport. `web/play_plan_extended.json`, at most 5 minutes, goes on to races in Snowflake Mountain and Sherbet
+Island, for when a longer play is needed, and the shaders it misses go into the list. Each plan's header
+says what it plays.
+
 ## Played
 
 How the page plays in Chrome and Firefox, run by run, is recorded in N64Recomp-browser's

@@ -1,11 +1,13 @@
 {
   "header": [
-    "Diddy Kong Racing's play plan for N64Recomp-browser's tools/play_page.mjs: the title, the menus to a new",
-    "Adventure as a player picks it (Enter, then A until the game is in Timber's Island), the hub driven about 15 s",
-    "(web/shader_survey.js's roam()), then a race in each of four worlds, reached the way the game's own teleport to",
-    "Future Fun Land loads a map (go(), since a player gets to them only by winning the races before) and driven about",
-    "30 s toward each checkpoint: maps 5, 13, 10 and 20, one in each of Dino Domain, Snowflake Mountain, Sherbet Island",
-    "and Dragon Forest."
+    "Diddy Kong Racing's regular plan for N64Recomp-browser's tools/play_page.mjs, 2-3 minutes with every timeout counted:",
+    "the launcher, Load ROM 6 s after it is up (the page starts RT64 only once it has the ROM, so the launcher builds no",
+    "shaders and says nothing to wait for), the logos to the title (shader_survey.js's titleReached(), a need), then the",
+    "menus to a new Adventure as a player picks it (Enter, then A until the game is in Timber's Island, a need that the",
+    "game is playing there), the hub driven about 20 s with the gas held, steering a while each way (roam()), and Dino",
+    "Domain's race (map 5) reached the way the game's own teleport to Future Fun Land loads a map (go(), since a player",
+    "gets to it only by winning the races before; a need that the map loaded with its racers) and driven 40 s toward each",
+    "checkpoint. web/play_plan_extended.json goes on to two more races, for when a longer play is needed."
   ],
   "page": "DKR-R.html",
   "load": [
@@ -18,25 +20,20 @@
   "start": [
     ["click", 628, 322],
     ["evalFile", "shader_survey.js"],
-    ["eval", "titleReached(60000)"]
+    ["need", "titleReached(20000)"]
   ],
   "play": [
-    ["wait", 15000],
+    ["wait", 3000],
     ["shot", "title.png"],
-    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 60000],
-    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 20000],
-    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 20000],
-    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 20000],
-    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
-    ["eval", "roam(15)"],
+    ["pressUntil", "Enter", "Enter", 13, 100, 400, "(n64r(0x800df470)|0) === 3", 8000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) !== 3", 5000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 19", 5000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x800df470)|0) === 6", 5000],
+    ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 5000],
+    ["need", "(() => { const s = dkrState(); return s.mode === 0 && !s.loading && s; })()"],
+    ["eval", "roam(21)"],
     ["shot", "timber.png"],
-    ["eval", "go(5, 30)"],
-    ["shot", "race.png"],
-    ["eval", "go(13, 30)"],
-    ["shot", "snowflake.png"],
-    ["eval", "go(10, 30)"],
-    ["shot", "sherbet.png"],
-    ["eval", "go(20, 30)"],
-    ["shot", "dragon.png"]
+    ["need", "go(5, 40).then((s) => /^map 5: [2-9] racers/.test(s) && s)"],
+    ["shot", "dino.png"]
   ]
 }
