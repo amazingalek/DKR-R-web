@@ -4,7 +4,7 @@
     "Adventure as a player picks it (Enter, then A until the game is in Timber's Island), the hub driven about 15 s",
     "(web/shader_survey.js's roam()), then a race in each of four worlds, reached the way the game's own teleport to",
     "Future Fun Land loads a map (go(), since a player gets to them only by winning the races before) and driven about",
-    "45 s toward each checkpoint: maps 5, 13, 10 and 20, one in each of Dino Domain, Snowflake Mountain, Sherbet Island",
+    "30 s toward each checkpoint: maps 5, 13, 10 and 20, one in each of Dino Domain, Snowflake Mountain, Sherbet Island",
     "and Dragon Forest."
   ],
   "page": "DKR-R.html",
@@ -30,13 +30,13 @@
     ["pressUntil", "Space", " ", 32, 100, 600, "(n64r(0x801234ec)|0) === 0", 20000],
     ["eval", "roam(15)"],
     ["shot", "timber.png"],
-    ["eval", "go(5, 45)"],
+    ["eval", "go(5, 30)"],
     ["shot", "race.png"],
-    ["eval", "go(13, 45)"],
+    ["eval", "go(13, 30)"],
     ["shot", "snowflake.png"],
-    ["eval", "go(10, 45)"],
+    ["eval", "go(10, 30)"],
     ["shot", "sherbet.png"],
-    ["eval", "go(20, 45)"],
+    ["eval", "go(20, 30)"],
     ["shot", "dragon.png"]
   ]
 }
