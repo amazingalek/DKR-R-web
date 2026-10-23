@@ -1,4 +1,10 @@
-# Building DKR-R 1.0.6
+# Building DKR-R v1.0.7
+
+The stable version is `1.0.7`. All delivered platforms must use the same
+accepted source/feature ledger. Start with the
+[release pipeline](../patches/release-prep/v1.0.7/BUILDING.txt) for the final
+composition and explicit prepared-input contract. Do not substitute an older
+package or rename a beta executable.
 
 For contributor checks that need no ROM or game build, start with
 `python3 scripts/check.py` and the [host presets](DEVELOPMENT.md#first-contribution-tests-without-a-rom).
@@ -17,6 +23,12 @@ PowerShell and WSL2/Ubuntu for the preparation workflow.
 Linux needs CMake 3.24+, Ninja, a compatible C++ toolchain, Vulkan/display
 development libraries and the AppImage packaging tools.
 Use the locked dependency revisions, not arbitrary installed substitutes.
+
+Linux updater checks use libcurl 7.85+ with HTTPS certificate validation; install
+`libcurl4-openssl-dev` before configuring. Windows uses system WinHTTP. Android
+and Apple builds use their platform HTTPS APIs. The private desktop updater is
+built separately from SDL/RT64 and is included by the package scripts.
+See [Updates](UPDATES.md) before preparing signed release assets.
 
 Supply your own clean US v1.0/v77 and US Rev A/v1.1/v80 ROMs locally.
 A complete release needs both native CPU payloads and the matching Rare RSP
@@ -76,17 +88,36 @@ or edit generated output to admit a new closure.
 
 ## Configure a complete desktop build
 
+Beta 5's local Online maximum-detail renderer also needs two fresh model-only
+outputs. These are separate from both the normal and owned CPU directories:
+
+```text
+python scripts/generate_visual_model_kernel.py --generated <normal-v77>
+    --header <pinned-recomp.h> --elf <v77.elf> --revision 77
+    --output <fresh-model-v77>
+```
+
+Repeat for revision 80 using its own ELF and normal input. The script checks
+the five leaf routine hashes, scalar symbols and memory ABI. It emits only
+the model closure, with checked reads, shadowed guest stores and an operation
+budget; there is no game-world redraw or gameplay/native-import escape.
+Supply both outputs using `DKR_VISUAL_MODEL_GENERATED_V77` and
+`DKR_VISUAL_MODEL_GENERATED_V80`. Without them the local model feature is not
+compiled and the live Online maximum-detail control remains unavailable.
+
 Example Windows configuration, with placeholder paths replaced:
 
 ```powershell
 cmake -S runtime-recomp -B build/public-windows -G "Visual Studio 17 2022" -A x64 `
-  '-DDKR_RELEASE_VERSION=1.0.6' `
+  '-DDKR_RELEASE_VERSION=1.0.7' `
   -DDKR_RUNTIME_BUILD_RT64=ON -DDKR_RUNTIME_BUILD_SDL3_INPUT_HOST=ON `
   '-DDKR_GENERATED_SOURCE_V77=<normal-v77>' '-DDKR_GENERATED_SOURCE_V80=<normal-v80>' `
   '-DDKR_GENERATED_RSP_SOURCE=<prepared-RSP-output>' `
   -DDKR_EXPERIMENTAL_RACE_TEST=ON `
   '-DDKR_EXPERIMENTAL_OWNED_GENERATED=<owned-v77>' `
   '-DDKR_EXPERIMENTAL_OWNED_GENERATED_V80=<owned-v80>' `
+  '-DDKR_VISUAL_MODEL_GENERATED_V77=<model-v77>' `
+  '-DDKR_VISUAL_MODEL_GENERATED_V80=<model-v80>' `
   -DDKR_LEGACY_QUALIFICATION=OFF -DDKR_REPLAY_QUALIFICATION=OFF `
   -DDKR_EXPERIMENTAL_RENDER_QUALIFICATION=OFF
 cmake --build build/public-windows --config Release --parallel
@@ -101,7 +132,7 @@ On Linux use Ninja and a fresh build directory, with the same reviewed payloads:
 
 ```bash
 cmake -S runtime-recomp -B build/public-linux -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DDKR_RELEASE_VERSION=1.0.6 \
+  -DCMAKE_BUILD_TYPE=Release '-DDKR_RELEASE_VERSION=1.0.7' \
   -DDKR_RUNTIME_BUILD_RT64=ON -DDKR_RUNTIME_BUILD_SDL3_INPUT_HOST=ON \
   '-DDKR_GENERATED_SOURCE_V77=<normal-v77>' \
   '-DDKR_GENERATED_SOURCE_V80=<normal-v80>' \
@@ -109,6 +140,8 @@ cmake -S runtime-recomp -B build/public-linux -G Ninja \
   -DDKR_EXPERIMENTAL_RACE_TEST=ON \
   '-DDKR_EXPERIMENTAL_OWNED_GENERATED=<owned-v77>' \
   '-DDKR_EXPERIMENTAL_OWNED_GENERATED_V80=<owned-v80>' \
+  '-DDKR_VISUAL_MODEL_GENERATED_V77=<model-v77>' \
+  '-DDKR_VISUAL_MODEL_GENERATED_V80=<model-v80>' \
   -DDKR_LEGACY_QUALIFICATION=OFF -DDKR_REPLAY_QUALIFICATION=OFF \
   -DDKR_EXPERIMENTAL_RENDER_QUALIFICATION=OFF
 cmake --build build/public-linux --parallel
@@ -117,12 +150,16 @@ DKR_LINUX_BUILD_DIR="$PWD/build/public-linux" ./scripts/Package-Linux-AppImage.s
 ```
 
 `VERSION` supplies the package version. Default outputs are
-`dist/DKR-R-1.0.6-Windows-x64.zip` and
-`dist/DKR-R-1.0.6-Linux-x86_64.AppImage`.
+`dist/DKR-R-1.0.7-Windows-x64.zip` and
+`dist/DKR-R-1.0.7-Linux-x86_64.AppImage`.
 Keep prior outputs; the AppImage packager expects a fresh output/AppDir.
-Do not skip runtime checks for a public package.
+Runtime packaging checks are on by default. If the release maintainer is doing
+all execution and acceptance on their own devices, package Linux without
+launching DKR-R by explicitly setting both `DKR_SKIP_RUNTIME_TESTS=1` and
+`DKR_DEFER_RUNTIME_TESTS_TO_USER=1`. This only defers execution; it does not
+declare the package tested or turn off architecture/content packaging guards.
 
-The delivered Linux 1.0.6 binaries require glibc 2.38 or newer. AppImages
+The Linux release toolchain uses glibc 2.38 or newer. AppImages
 bundle application libraries, not the system glibc or GPU driver. Record the
 ELF architecture and required symbol versions when using a different build host.
 
@@ -216,7 +253,7 @@ Android needs the correct NDK/SDK, ARM64 SDL2 input, shared C++ runtime and
 native alignment requirements. Don't reuse a desktop SDL3 worker as an Android
 input backend. No APK or cross-compiled AppImage certifies a physical GPU.
 
-For 1.0.6, compose both normal and owned payloads above before using
+For 1.0.7, compose both normal and owned payloads above before using
 `runtime-recomp/cmake/AndroidArm64.cmake` or
 `runtime-recomp/cmake/LinuxArm64.cmake`. Android builds the `DKRPortGame` and
 `DKRLegacyModWorker` targets with the Android NDK. Linux ARM64 builds the
@@ -226,7 +263,7 @@ Keep private qualification switches off in the packaged builds.
 Package Android with `scripts/Package-Android-Preview.ps1 -ReleaseBuild`,
 supplying the native build, SDL2 source, NDK, Gradle and fresh staging/output
 directories. Despite the script's historical name, `-ReleaseBuild` produces
-the non-debuggable `DKR-R-1.0.6-Android-arm64.apk`. Build code 1060002 keeps
+the non-debuggable `DKR-R-1.0.7+beta.4-Android-arm64.apk`. Build code 1070010 keeps
 the existing application ID and signing identity so it can update the old
 app. Verify the signature, ARM64 libraries, 16 KiB ELF/ZIP alignment and
 bundled notices before distribution; do not replace the signing key casually.
@@ -234,10 +271,37 @@ bundled notices before distribution; do not replace the signing key casually.
 For ARM64 AppImages, set `DKR_LINUX_ARCH=aarch64` and use matching ARM64
 linuxdeploy/AppImage tools with `scripts/Package-Linux-AppImage.sh`. The
 cross-host runner is `scripts/Run-Arm64-AppImage.sh`; QEMU self-tests still
-do not replace device rendering/audio tests. The Steam Deck artifact is a
-named copy of the checked Linux x86_64 AppImage, not a separate engine build.
+do not replace device rendering/audio tests. Steam Deck uses the Linux x86_64
+AppImage, not ARM64. Beta 3 also has an extracted portable tarball with the
+same x86_64 application/libraries and `START-DKR-R.sh`; it is not another engine.
+
+## Custom Magic Codes SDK
+
+The SDK's authored C, headers, examples and address-only v77/v80 reference kits
+live in `modding/`. Start with the [Modders Guide](../modding/MODDERS-GUIDE.txt)
+and [compact API reference](../modding/SDK.txt). Do not edit the protected
+generated CPU trees or dependencies to build a mod.
+
+Normal CPU wrapping is staged by `cmake/CustomMagicCodes.cmake` into new outputs.
+Supply the complete `DKR_CODE_POLICY_V77` / `DKR_CODE_POLICY_V80` TOML inputs that
+produced the normal payloads; defaults are their sibling `v77.toml` / `v80.toml`.
+The private generator accepts `--code-policy-config`. These inputs preserve
+port-fix protection; do not substitute an incomplete policy to bypass a refusal.
+
+The metadata-only inspector target is `DKRMagicCodeInspect`. SDK staging uses
+`python scripts/stage_magic_code_sdk.py --output <fresh-directory>` and produces
+both the plain-text and navigable HTML book. Reference-kit receipts pin exact
+bytes; the repository preserves those files without line-ending conversion.
 
 ## Release checks
+
+For maintainer-requested builds, runtime/gameplay testing can be reserved for
+the maintainer. Build only the runtime/helper targets; do not invoke CTest or
+the executables. Windows packaging supports `-SkipRuntimeTests
+-DeferRuntimeTestsToUser`; Linux packaging uses `DKR_SKIP_RUNTIME_TESTS=1` and
+`DKR_DEFER_RUNTIME_TESTS_TO_USER=1`. These explicit overrides do not change the
+normal packaging defaults. Keep previews in a fresh output directory and do
+not replace accepted release artifacts.
 
 Run metadata and asset checks:
 
@@ -253,3 +317,9 @@ Ship the whole package and notices, not just the game executable.
 
 Record source identity, configuration, package hashes, test results and
 outstanding device/gameplay checks in [release validation](../RELEASE-VALIDATION.md).
+
+## v1.0.8 startup hotfix
+
+Use [the startup hotfix pipeline](../patches/startup-memory/BUILDING.txt).
+It composes the same frozen 1.0.7 inputs, adds only the isolated runtime-memory
+patch and compiles the actual 1.0.8 version. Android version code is 1080001.

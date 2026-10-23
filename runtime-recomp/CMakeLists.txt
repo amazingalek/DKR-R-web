@@ -85,6 +85,12 @@ endif()
 include(CTest)
 include(cmake/ProjectTests.cmake)
 
+if(BUILD_TESTING AND NOT ANDROID)
+    add_executable(DKRLauncherCopyTests tests/launcher_copy_tests.cpp)
+    target_include_directories(DKRLauncherCopyTests PRIVATE src/game)
+    add_test(NAME DKRLauncherCopy COMMAND DKRLauncherCopyTests)
+endif()
+
 
 include(cmake/SourceRoots.cmake)
 option(DKR_RUNTIME_BUILD_GENERATED "Compile N64Recomp-generated DKR CPU functions" ON)
@@ -120,6 +126,9 @@ set(DKR_RECOMP_SOURCE "${DKR_MODERN_RUNTIME_SOURCE}/N64Recomp")
 set(DKR_RT64_SOURCE "${DKR_DEPENDENCIES_DIR}/rt64")
 
 if(BUILD_TESTING AND NOT ANDROID)
+    add_executable(DKRLavaGlowTests tests/lava_glow_tests.cpp)
+    target_include_directories(DKRLavaGlowTests PRIVATE src/game)
+    add_test(NAME DKRLavaGlow COMMAND DKRLavaGlowTests)
     add_executable(DKREnhancedWaterPolicyTests tests/enhanced_water_policy_tests.cpp)
     target_include_directories(DKREnhancedWaterPolicyTests PRIVATE src/game "${DKR_RT64_SOURCE}/src/contrib" "${CMAKE_CURRENT_LIST_DIR}/../patches/enhanced-water/native")
     add_test(NAME DKREnhancedWaterPolicy COMMAND DKREnhancedWaterPolicyTests)
@@ -282,6 +291,8 @@ endif()
 target_include_directories(DKRNetplayCrypto PUBLIC
     "${DKR_MONOCYPHER_SOURCE}/src"
 )
+
+include(cmake/Updates.cmake)
 
 add_library(DKRNetplayCore STATIC
     src/game/netplay/authoritative_state.cpp
@@ -656,6 +667,7 @@ endif()
 if(DKR_RUNTIME_BUILD_GENERATED)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/LegacyMods.cmake")
+    include("${CMAKE_CURRENT_LIST_DIR}/cmake/CustomMagicCodes.cmake")
     foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
         string(TOUPPER "${config}" config_upper)
         set_target_properties(DKRLegacyModWorker PROPERTIES
@@ -675,6 +687,7 @@ if(DKR_RUNTIME_BUILD_GENERATED)
     # at compile time so protected generated output remains untouched.
     function(dkr_add_recompiled_payload TARGET_NAME REVISION SOURCE_DIR WRAPPER)
         set(FORCE_INCLUDE "${ARGV4}")
+        dkr_stage_magic_code_payload(SOURCE_DIR "${SOURCE_DIR}" "${REVISION}")
         file(GLOB_RECURSE GENERATED_C CONFIGURE_DEPENDS "${SOURCE_DIR}/*.c")
         file(GLOB_RECURSE GENERATED_CXX CONFIGURE_DEPENDS "${SOURCE_DIR}/*.cpp")
         set(GENERATED_FILES ${GENERATED_C} ${GENERATED_CXX})
@@ -726,6 +739,7 @@ if(DKR_RUNTIME_BUILD_GENERATED)
         endforeach()
 
         add_library(${TARGET_NAME} STATIC ${GENERATED_FILES} "${WRAPPER}")
+        target_compile_features(${TARGET_NAME} PRIVATE c_std_11)
         target_include_directories(${TARGET_NAME} PRIVATE
             "${DKRPORT_ROOT}/include"
             "${CMAKE_CURRENT_LIST_DIR}/src/game"
@@ -792,6 +806,7 @@ if(DKR_RUNTIME_BUILD_GENERATED)
             "Run Generate-DKR-RSP.cmd first.")
     endif()
     set(DKR_GAME_SOURCES
+        src/game/runtime_code_mods.cpp
         src/game/audio_equalizer.cpp
         # The policy's asset hooks call into these with or without RT64; the
         # table logic itself is DKRCustomTracksCore, via DKRLegacyModLaunch.
@@ -871,6 +886,8 @@ if(DKR_RUNTIME_BUILD_GENERATED)
             src/game/hud_basic_settings.cpp
             src/game/f3ddkr_rt64.cpp
             src/game/local_scenery_rt64.cpp
+            src/game/online_view_rt64.cpp
+            src/game/online_nameplates_rt64.cpp
             src/game/generated/jumpman_font.c
             src/game/generated/racing_banana_font.c
             src/game/generated/selawik_font.c
@@ -922,6 +939,7 @@ if(DKR_RUNTIME_BUILD_GENERATED)
         DKR_PATCH_POLICY_SHA256="${DKR_PATCH_POLICY_SHA256}"
         NOMINMAX
     )
+    target_link_libraries(DKRPortGame PRIVATE DKRUpdateClient)
     if(DKR_EXPERIMENTAL_RACE_TEST)
         target_compile_definitions(DKRPortGame PRIVATE DKR_EXPERIMENTAL_RACE_TEST=1)
     endif()
@@ -946,6 +964,7 @@ if(DKR_RUNTIME_BUILD_GENERATED)
     endif()
     target_link_libraries(DKRPortGame PRIVATE DKRNetplayCore)
     target_link_libraries(DKRPortGame PRIVATE DKRLegacyModLaunch DKRLegacyGuestIO)
+    target_link_libraries(DKRPortGame PRIVATE DKRCustomMagicCodes)
     if(NOT EMSCRIPTEN)
         add_dependencies(DKRPortGame DKRLegacyModWorker)
     endif()
@@ -1008,40 +1027,44 @@ if(DKR_RUNTIME_BUILD_GENERATED)
                 VERBATIM
             )
         endif()
+        set(DKR_GAME_ASSET_DIRECTORY "$<TARGET_FILE_DIR:DKRPortGame>")
+        if(WIN32)
+            set(DKR_GAME_ASSET_DIRECTORY "$<TARGET_FILE_DIR:DKRUpdateLauncher>")
+        endif()
         if(NOT EMSCRIPTEN)
         add_custom_command(TARGET DKRPortGame POST_BUILD
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${CMAKE_BINARY_DIR}/dkr-release.json"
-                "$<TARGET_FILE_DIR:DKRPortGame>/dkr-release.json"
+                "${DKR_GAME_ASSET_DIRECTORY}/dkr-release.json"
             COMMAND "${CMAKE_COMMAND}" -E make_directory
-                "$<TARGET_FILE_DIR:DKRPortGame>/assets/ui/Icons"
+                "${DKR_GAME_ASSET_DIRECTORY}/assets/ui/Icons"
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${CMAKE_CURRENT_LIST_DIR}/../assets/ui/Icons/DKR-R-Logo.bmp"
-                "$<TARGET_FILE_DIR:DKRPortGame>/assets/ui/Icons/DKR-R-Logo.bmp"
+                "${DKR_GAME_ASSET_DIRECTORY}/assets/ui/Icons/DKR-R-Logo.bmp"
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${CMAKE_CURRENT_LIST_DIR}/../assets/ui/Icons/DKR-R-Spinning-Icon.png"
-                "$<TARGET_FILE_DIR:DKRPortGame>/assets/ui/Icons/DKR-R-Spinning-Icon.png"
+                "${DKR_GAME_ASSET_DIRECTORY}/assets/ui/Icons/DKR-R-Spinning-Icon.png"
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${CMAKE_CURRENT_LIST_DIR}/../assets/ui/Icons/DKR-R-Short-Logo.png"
-                "$<TARGET_FILE_DIR:DKRPortGame>/assets/ui/Icons/DKR-R-Short-Logo.png"
+                "${DKR_GAME_ASSET_DIRECTORY}/assets/ui/Icons/DKR-R-Short-Logo.png"
             COMMAND "${CMAKE_COMMAND}" -E make_directory
-                "$<TARGET_FILE_DIR:DKRPortGame>/assets/ui/Backgrounds"
+                "${DKR_GAME_ASSET_DIRECTORY}/assets/ui/Backgrounds"
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${CMAKE_CURRENT_LIST_DIR}/../assets/ui/Backgrounds/DKR-R-Launcher-Background.png"
-                "$<TARGET_FILE_DIR:DKRPortGame>/assets/ui/Backgrounds/DKR-R-Launcher-Background.png"
+                "${DKR_GAME_ASSET_DIRECTORY}/assets/ui/Backgrounds/DKR-R-Launcher-Background.png"
             COMMAND "${CMAKE_COMMAND}" -E make_directory
-                "$<TARGET_FILE_DIR:DKRPortGame>/assets/filters"
+                "${DKR_GAME_ASSET_DIRECTORY}/assets/filters"
             COMMAND "${CMAKE_COMMAND}" -E copy_directory
                 "${CMAKE_CURRENT_LIST_DIR}/../assets/filters"
-                "$<TARGET_FILE_DIR:DKRPortGame>/assets/filters"
+                "${DKR_GAME_ASSET_DIRECTORY}/assets/filters"
             COMMAND "${CMAKE_COMMAND}" -E make_directory
-                "$<TARGET_FILE_DIR:DKRPortGame>/assets/controllers"
+                "${DKR_GAME_ASSET_DIRECTORY}/assets/controllers"
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${CMAKE_CURRENT_LIST_DIR}/../assets/controllers/gamecontrollerdb.txt"
-                "$<TARGET_FILE_DIR:DKRPortGame>/assets/controllers/gamecontrollerdb.txt"
+                "${DKR_GAME_ASSET_DIRECTORY}/assets/controllers/gamecontrollerdb.txt"
             COMMAND "${CMAKE_COMMAND}" -E copy_directory
                 "${CMAKE_CURRENT_LIST_DIR}/../assets/ui/CustomTrackBackgrounds"
-                "$<TARGET_FILE_DIR:DKRPortGame>/assets/ui/CustomTrackBackgrounds"
+                "${DKR_GAME_ASSET_DIRECTORY}/assets/ui/CustomTrackBackgrounds"
             COMMENT "Staging the DKR-R launcher, graphics and controller assets"
             VERBATIM
         )
@@ -1065,11 +1088,18 @@ if(DKR_RUNTIME_BUILD_GENERATED)
     )
     if(WIN32)
         set_target_properties(DKRPortGame PROPERTIES WIN32_EXECUTABLE TRUE)
+        set_target_properties(DKRPortGame PROPERTIES OUTPUT_NAME "DKR-R-Runtime")
+        set_target_properties(DKRPortGame PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/libexec/dkr-r")
+        add_dependencies(DKRPortGame DKRUpdateLauncher DKRUpdateHelper)
     endif()
     foreach(config Debug Release RelWithDebInfo MinSizeRel)
         string(TOUPPER "${config}" config_upper)
+        set(_dkr_game_output "${CMAKE_BINARY_DIR}/bin/${config}")
+        if(WIN32)
+            string(APPEND _dkr_game_output "/libexec/dkr-r")
+        endif()
         set_target_properties(DKRPortGame PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/bin/${config}"
+            RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${_dkr_game_output}"
         )
     endforeach()
 endif()
@@ -1078,6 +1108,16 @@ add_executable(DKRRuntimeProbe src/runtime_probe.cpp)
 
 set(DKR_EXPERIMENTAL_OWNED_GENERATED "" CACHE PATH "NEW isolated owned CPU Patch Pipeline output; integration targets only")
 set(DKR_EXPERIMENTAL_OWNED_GENERATED_V80 "" CACHE PATH "NEW isolated US Rev A full-scene owned CPU Patch Pipeline output")
+set(DKR_VISUAL_MODEL_GENERATED_V77 "" CACHE PATH "NEW renderer-only model kernel output for US v1.0")
+set(DKR_VISUAL_MODEL_GENERATED_V80 "" CACHE PATH "NEW renderer-only model kernel output for US v1.1")
+if(DKR_RUNTIME_BUILD_GENERATED AND DKR_RUNTIME_BUILD_RT64 AND DKR_VISUAL_MODEL_GENERATED_V77 AND DKR_VISUAL_MODEL_GENERATED_V80)
+    include(cmake/LocalModelDetail.cmake)
+    dkr_add_local_model_kernel(DKRLocalModelV77 "${DKR_VISUAL_MODEL_GENERATED_V77}" 77)
+    dkr_add_local_model_kernel(DKRLocalModelV80 "${DKR_VISUAL_MODEL_GENERATED_V80}" 80)
+    target_sources(DKRPortGame PRIVATE src/game/local_model_rt64.cpp)
+    target_compile_definitions(DKRPortGame PRIVATE DKR_LOCAL_MODEL_DETAIL=1)
+    target_link_libraries(DKRPortGame PRIVATE DKRLocalModelV77 DKRLocalModelV80)
+endif()
 if(DKR_EXPERIMENTAL_OWNED_GENERATED)
     include(cmake/ExperimentalOwnedGame.cmake)
     include(cmake/OwnedContentIdentity.cmake)
@@ -1124,6 +1164,8 @@ if(DKR_EXPERIMENTAL_OWNED_GENERATED)
         file(GLOB owned_identity_files CONFIGURE_DEPENDS
             "${CMAKE_CURRENT_LIST_DIR}/src/game/audio_event_queue*.h"
             "${CMAKE_CURRENT_LIST_DIR}/src/game/runtime_legacy_mods.cpp" "${CMAKE_CURRENT_LIST_DIR}/src/game/runtime_legacy_mods.hpp"
+            "${CMAKE_CURRENT_LIST_DIR}/src/game/runtime_code_mods.cpp" "${CMAKE_CURRENT_LIST_DIR}/src/game/runtime_code_mods.hpp"
+            "${CMAKE_CURRENT_LIST_DIR}/src/game/replay_probe_capture.cpp" "${CMAKE_CURRENT_LIST_DIR}/src/game/replay_probe_capture.hpp"
             "${CMAKE_CURRENT_LIST_DIR}/src/game/mods/*.cpp" "${CMAKE_CURRENT_LIST_DIR}/src/game/mods/*.hpp" "${CMAKE_CURRENT_LIST_DIR}/src/game/mods/*.h"
             "${owned_directory}/*.c" "${owned_directory}/*.cpp" "${owned_directory}/*.h" "${owned_directory}/*.hpp"
             "${CMAKE_CURRENT_LIST_DIR}/tests/replay_probe/*.c" "${CMAKE_CURRENT_LIST_DIR}/tests/replay_probe/*.cpp"
@@ -1131,8 +1173,9 @@ if(DKR_EXPERIMENTAL_OWNED_GENERATED)
             "${CMAKE_CURRENT_LIST_DIR}/src/game/netplay/*.c" "${CMAKE_CURRENT_LIST_DIR}/src/game/netplay/*.cpp"
             "${CMAKE_CURRENT_LIST_DIR}/src/game/netplay/*.h" "${CMAKE_CURRENT_LIST_DIR}/src/game/netplay/*.hpp")
         dkr_owned_content_identity(owned_content_parts "${CMAKE_CURRENT_LIST_DIR}" "${owned_directory}"
-            "${owned_directory}/manifest.json" "${CMAKE_CURRENT_LIST_DIR}/src/game/track_select_draw_guest.h" ${owned_identity_files})
-        set(owned_identity_parts "owned-revision:${owned_revision}|numeric-policy:separate-fp-rounding-v1|${owned_content_parts}")
+            "${owned_directory}/manifest.json" "${CMAKE_CURRENT_LIST_DIR}/src/game/track_select_draw_guest.h"
+            "${DKRPORT_ROOT}/modding/reference-us-v77/game_symbols.inc" "${DKRPORT_ROOT}/modding/reference-us-v80/game_symbols.inc" ${owned_identity_files})
+        set(owned_identity_parts "owned-revision:${owned_revision}|identity-policy:text-lf-v1|numeric-policy:separate-fp-rounding-v1|${owned_content_parts}")
         string(SHA256 DKR_OWNED_BUILD_ID_V${owned_revision} "${owned_identity_parts}")
         message(STATUS "Owned v${owned_revision} rollback contract: ${DKR_OWNED_BUILD_ID_V${owned_revision}}")
     endforeach()
@@ -1283,6 +1326,7 @@ if(TARGET DKRPortGame AND DKR_RUNTIME_BUILD_RT64 AND NOT APPLE AND NOT EMSCRIPTE
             "${DKR_EXPERIMENTAL_OWNED_GENERATED}/*.cpp"
             "${DKR_EXPERIMENTAL_OWNED_GENERATED}/*.h")
         set(DKR_OWNED_CONTRACT_FILES
+                "${DKRPORT_ROOT}/modding/reference-us-v77/game_symbols.inc" "${DKRPORT_ROOT}/modding/reference-us-v80/game_symbols.inc"
                 "${DKR_EXPERIMENTAL_OWNED_GENERATED}/manifest.json"
                 ${DKR_INTERACTIVE_SOURCE} tests/replay_probe/probe_driver.cpp
                 tests/replay_probe/probe_bridge.h tests/replay_probe/probe_native.c
@@ -1430,7 +1474,9 @@ if(BUILD_TESTING)
             "DKRHarnessReports|harness_report_tests.py"
             "DKRReplayCapture|replay_capture_tests.py"
             "DKRCiSummary|ci_summary_tests.py"
-            "DKRStressRunner|stress_runner_tests.py")
+            "DKRStressRunner|stress_runner_tests.py"
+            "DKROwnedContentIdentity|owned_content_identity_tests.py"
+            "DKRLauncherCopySource|launcher_copy_source_tests.py")
         string(REPLACE "|" ";" tooling_test "${tooling_test}")
         list(GET tooling_test 0 test_name)
         list(GET tooling_test 1 test_script)

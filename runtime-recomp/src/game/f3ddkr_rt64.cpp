@@ -14,6 +14,7 @@
 #include "runtime_platform.hpp"
 #include "widescreen_policy.hpp"
 #include "split_screen_rt64.hpp"
+#include "online_view_rt64.hpp"
 #include "water_uv_rt64.hpp"
 #include "water_performance.hpp"
 #include "water_scroll_policy.hpp"
@@ -22,6 +23,9 @@
 #include "enhanced_water_rt64.hpp"
 #endif
 #include "local_scenery_rt64.hpp"
+#if defined(DKR_LOCAL_MODEL_DETAIL)
+#include "local_model_rt64.hpp"
+#endif
 #include "local_scenery_policy.hpp"
 #include "netplay/experimental_performance.hpp"
 
@@ -377,9 +381,13 @@ struct dkr::runtime::F3DDKRRT64Bridge::StateData {
     bool water_camera_valid = false;
     float water_time = 0.0F;
     const water::enhanced::Registry* water_registry = nullptr;
+    const water::enhanced::LavaGlowCache* lava_glow_cache = nullptr;
+    float lava_glow_step = 0;
     std::uint32_t water_camera_address = 0;
 #endif
     LocalSceneryRT64Pass* local_scenery=nullptr;
+    LocalModelRT64Pass* local_models=nullptr;
+    online_view::Pass* online_view=nullptr;
     std::uint32_t vertex_offset = 0;
     std::uint32_t texture_offset = 0;
     std::uint32_t texture_shift = 0;
@@ -1787,11 +1795,14 @@ void dkr::runtime::F3DDKRRT64Bridge::FinishShadowScope(
 
 void dkr::runtime::F3DDKRRT64Bridge::process(RT64::Application& application,
                                              const OSTask& task,
-                                             LocalSceneryRT64Pass* scenery) {
+                                             LocalSceneryRT64Pass* scenery,online_view::Pass* online,
+                                             LocalModelRT64Pass* models) {
     active_ = this;
     StateData fresh{};
     fresh.task_count = data_->task_count + 1;
     fresh.local_scenery=scenery;
+    fresh.local_models=models;
+    fresh.online_view=online;
     if (enhancements::modern_presentation_enabled()) {
         if (application.userConfig.aspectRatio == RT64::UserConfiguration::AspectRatio::Expand) {
             int width = 0, height = 0;
@@ -1817,6 +1828,27 @@ void dkr::runtime::F3DDKRRT64Bridge::process(RT64::Application& application,
         water::enhanced::requested_quality.load(std::memory_order_relaxed)!=water::enhanced::Quality::Original) {
         data_->water_registry=&water::enhanced::task_registry(*state,presentation::task_scene_generation());
         data_->water_time=float(presentation::task_presentation_time());
+        struct GlowTaskCache {
+            water::enhanced::LavaGlowCache cache;
+            std::uint32_t scene=~0U;
+            float current=-1,previous=-1;
+            float stepped=-1;
+            const water::enhanced::GlowGeometry* stepped_geometry=nullptr;
+        };
+        static thread_local GlowTaskCache glow;
+        const auto scene=presentation::task_scene_generation();
+        if(glow.scene!=scene || data_->water_time<glow.current) {
+            glow.scene=scene;glow.current=glow.previous=data_->water_time;
+        } else if(glow.current!=data_->water_time) {
+            glow.previous=glow.current;glow.current=data_->water_time;
+        }
+        data_->lava_glow_step=std::clamp(glow.current-glow.previous,0.0F,0.1F);
+        glow.cache.prepare(data_->water_registry->glow_geometry(),water::enhanced::lava_light_range.load());
+        if(glow.stepped!=data_->water_time || glow.stepped_geometry!=data_->water_registry->glow_geometry().get()) {
+            glow.cache.step(data_->water_time);glow.stepped=data_->water_time;
+            glow.stepped_geometry=data_->water_registry->glow_geometry().get();
+        }
+        data_->lava_glow_cache=&glow.cache;
     }
 #endif
     RT64::RSP& rsp = *state->rsp;
@@ -1842,6 +1874,8 @@ void dkr::runtime::F3DDKRRT64Bridge::process(RT64::Application& application,
     rsp.extended.invViewProjMatrix = identity;
     rsp.projectionMatrixChanged = true;
     rsp.modelViewProjChanged = true;
+
+    if(online)online->begin(*state);
 
     const std::uint32_t start = PhysicalAddress(rsp, task.t.data_ptr);
     // Keep RT64's normal profiling and interrupt completion path. Its optional
@@ -1933,6 +1967,7 @@ void dkr::runtime::F3DDKRRT64Bridge::process(RT64::Application& application,
     data_->matrix_aspect_override = G_EX_ASPECT_AUTO;
     data_->background_fill_stretch_active = false;
     g_completed_tasks.store(data_->task_count, std::memory_order_release);
+    if(data_->online_view)data_->online_view->finish(*state);
     if (water::enabled()) {
         water::end_task(presentation::task_scene_generation(),
             ReadU32(state->RDRAM, revision_addresses::CurrentMapId & 0x007FFFFCU),
@@ -2014,7 +2049,8 @@ void dkr::runtime::F3DDKRRT64Bridge::Dispatch(
         RejectTask(display_list);
         return;
     }
-    if (opcode == kFullSyncOpcode && (active_->data_->split_color_image_count != 0U ||
+    if (opcode == kFullSyncOpcode && ((active_->data_->online_view&&active_->data_->online_view->focused()) ||
+                                     active_->data_->split_color_image_count != 0U ||
                                      active_->data_->hud_color_image_count != 0U ||
                                      active_->data_->track_color_images.count != 0U)) {
         // Finish pending calls before normalising the producer-owned aggregate;
@@ -2035,7 +2071,8 @@ void dkr::runtime::F3DDKRRT64Bridge::Dispatch(
                           pair.colorImage.address) != end ||
                 std::find(data.hud_color_images.begin(), hud_end,
                           pair.colorImage.address) != hud_end ||
-                data.track_color_images.contains(pair.colorImage.address)) {
+                data.track_color_images.contains(pair.colorImage.address) ||
+                (data.online_view&&data.online_view->owns_framebuffer(pair.colorImage.address))) {
                 const auto authored_union = pair.scissorRect;
                 if(data.track_color_images.contains(pair.colorImage.address))
                     presentation::normalise_track_select_framebuffer_extent(pair);
@@ -2098,6 +2135,8 @@ void dkr::runtime::F3DDKRRT64Bridge::Dispatch(
         data.track_preview_pending=false;
     }
     AdjustSplitViewportCommand(state, command, opcode);
+    if(data.online_view)data.online_view->after_command(*state,opcode==kSetScissorOpcode,
+        opcode==kMoveMemOpcode&&command->p0(16,8)==kViewportMoveMemType);
 }
 
 void dkr::runtime::F3DDKRRT64Bridge::AdjustSplitViewportCommand(
@@ -2176,6 +2215,21 @@ void dkr::runtime::F3DDKRRT64Bridge::ApplyPresentationMarkers(
         command > rdram_begin + kRDRAMSize - sizeof(RT64::DisplayList)) {
         return;
     }
+    if(auto* online=active_->data_->online_view) {
+        online->selector([](RT64::RSP& rsp,std::uint32_t id){SelectInterpolationGroup(rsp,id,false,false,false,G_EX_ASPECT_ADJUST,false,0U,true);});
+        online->before_command(*state,static_cast<std::uint32_t>(command-rdram_begin));
+    }
+#if defined(DKR_LOCAL_MODEL_DETAIL)
+    if(auto* models=active_->data_->local_models) {
+        models->draw_at(*state,static_cast<std::uint32_t>(command-rdram_begin),
+            [](RT64::RSP& rsp,std::uint32_t id){
+                const auto& data=*active_->data_;
+                SelectInterpolationGroup(rsp,id,true,true,true,
+                    ActiveAspectMode(data.interpolation_groups,
+                        data.matrix_aspect_override_active,data.matrix_aspect_override));
+            });
+    }
+#endif
     if(auto* scenery=active_->data_->local_scenery) {
         scenery->draw_at(*state,static_cast<std::uint32_t>(command-rdram_begin),
             [](RT64::RSP& rsp,std::uint32_t id){
@@ -2221,7 +2275,7 @@ void dkr::runtime::F3DDKRRT64Bridge::ApplyPresentationMarkers(
                 if (data.rejected_hud_widgets.reject_begin(data.hud_widget_depth,data.hud_widgets.size())) continue;
                 if (!marker.hud_transform.valid()) { ++data.rejected_hud_widgets.depth; continue; }
                 auto& scope = data.hud_widgets[data.hud_widget_depth++];
-                scope.transform = marker.hud_transform;
+                scope.transform = data.online_view&&data.online_view->focused_hud()?hud::groups::Transform{}:marker.hud_transform;
                 const auto& t = scope.transform;
                 state->rdp->pushScissor();
                 auto& clip = state->rdp->scissorRectStack[state->rdp->scissorStackSize-1];
@@ -2427,6 +2481,7 @@ void dkr::runtime::F3DDKRRT64Bridge::ApplyPresentationGroup(
     }
 
     if (kind == PresentationMarkerKind::HudPass) {
+        if(data.online_view&&data.online_view->focused_hud())presentation_variant=hud::reference::kPassVariant;
         state->flush();
         if (mode == kHudPassMarkerBeginMode) {
             if (data.rejected_hud_scopes.reject_begin(
@@ -2718,6 +2773,9 @@ void dkr::runtime::F3DDKRRT64Bridge::Matrix(
         matrix_group =
             dkr::runtime::presentation::matrix_interpolation(address);
     }
+    else if(data.online_view) {
+        matrix_group.camera_root=presentation::matrix_interpolation(address).camera_root;
+    }
     data.interpolation_groups.load_matrix(
         index, matrix_group.identity, matrix_group.interpolate_vertices,
         matrix_group.interpolate_texcoords, matrix_group.interpolate_tiles,
@@ -2750,6 +2808,7 @@ void dkr::runtime::F3DDKRRT64Bridge::Matrix(
         if (presentation::apply_world_depth_remap(rsp.modelMatrixStack[index], data.clearance_remap))
             rsp.modelViewProjChanged = true;
     }
+    if(matrix_group.camera_root&&data.online_view)data.online_view->camera_root(rsp,index);
 #if defined(DKR_ENHANCED_WATER)
     if(matrix_group.camera_root) {
         data.water_camera_address=address;
@@ -2765,6 +2824,7 @@ void dkr::runtime::F3DDKRRT64Bridge::FillRect(
     RT64::State* state, RT64::DisplayList** display_list) {
     assert(active_ != nullptr);
     StateData& data = *active_->data_;
+    if(data.online_view&&data.online_view->suppress_rectangle(*state))return;
     if (!data.background_fill_stretch_active) {
         RT64::GBI_RDP::fillRect(state, display_list);
         return;
@@ -2793,14 +2853,15 @@ void dkr::runtime::F3DDKRRT64Bridge::HudTextureRect(
     RT64::State* state, RT64::DisplayList** display_list) {
     const bool flip = ((*display_list)->w0 >> 24U) == G_TEXRECTFLIP;
     const auto& data = *active_->data_;
-    if (data.hud_widget_depth == 0) {
+    const bool online_widget=data.online_view&&data.online_view->widget_active();
+    if (data.hud_widget_depth == 0&&!online_widget) {
         if (flip) RT64::GBI_RDP::texrectFlip(state,display_list);
         else RT64::GBI_RDP::texrect(state,display_list);
         return;
     }
     // Do not repack to unsigned 12-bit command coordinates. Widescreen HUD
     // positions may be negative, and RT64 accepts signed rectangle bounds.
-    const auto& t = data.hud_widgets[data.hud_widget_depth-1].transform;
+    const auto t = online_widget?data.online_view->widget_transform():data.hud_widgets[data.hud_widget_depth-1].transform;
     auto* command = *display_list;
     const int ulx=command->p1(12,12), uly=command->p1(0,12);
     const int lrx=command->p0(12,12), lry=command->p0(0,12);
@@ -2936,6 +2997,10 @@ void dkr::runtime::F3DDKRRT64Bridge::Vertex(
         return;
     }
     const auto original_matrix = rsp.modelMatrixStack[data.selected_matrix];
+    const bool online_widget=data.online_view&&data.online_view->widget_active();
+    const bool transformed_hud=online_widget||data.hud_widget_depth!=0;
+    const auto hud_transform=online_widget?data.online_view->widget_transform():
+        data.hud_widget_depth?data.hud_widgets[data.hud_widget_depth-1].transform:hud::groups::Transform{};
     bool adjusted_billboard = false;
     if (data.billboard && append && rsp.indices[0] <
         state->ext.workloadQueue->workloads[state->ext.workloadQueue->writeCursor]
@@ -2943,12 +3008,12 @@ void dkr::runtime::F3DDKRRT64Bridge::Vertex(
         const auto& workload =
             state->ext.workloadQueue->workloads[state->ext.workloadQueue->writeCursor];
         hlslpp::float4 anchor = workload.drawData.posTransformed[rsp.indices[0]];
-        if(data.hud_widget_depth!=0) {
+        if(transformed_hud) {
             // The ortho-sprite anchor was loaded earlier inside this same HUD
             // scope. Undo its group affine before adding it to the billboard
             // matrix, otherwise the quad receives the translation/scale twice.
             anchor=hud::groups::untransform_anchor(anchor,rsp.viewportStack[rsp.viewportStackSize-1],
-                data.hud_widgets[data.hud_widget_depth-1].transform);
+                hud_transform,online_widget?2.5F:1.5F);
         }
         auto adjusted_matrix = original_matrix;
         adjusted_matrix[3] += anchor;
@@ -2958,14 +3023,33 @@ void dkr::runtime::F3DDKRRT64Bridge::Vertex(
     }
 
     const auto authored_hud_matrix = rsp.modelMatrixStack[data.selected_matrix];
-    if (data.hud_widget_depth != 0) {
+    if (transformed_hud) {
         rsp.modelMatrixStack[data.selected_matrix] = hud::groups::transform_mvp(
             authored_hud_matrix, rsp.viewportStack[rsp.viewportStackSize-1],
-            data.hud_widgets[data.hud_widget_depth-1].transform);
+            hud_transform,online_widget?2.5F:1.5F);
         rsp.modelViewProjChanged = true;
     }
     rsp.setVertex(kScratchVertexAddress, count, destination);
-    if (data.hud_widget_depth != 0) {
+#if defined(DKR_ENHANCED_WATER)
+    if(data.lava_glow_cache && data.lava_glow_cache->ready() && data.water_camera_valid &&
+       !data.billboard && data.hud_widget_depth==0 && !data.shadow_scope_active) {
+        auto& draw=state->ext.workloadQueue->workloads[state->ext.workloadQueue->writeCursor].drawData;
+        for(std::uint32_t i=0;i<count;++i) {
+            const auto address=source+i*10U;
+            const water::enhanced::Vec3 point{float(ReadS16(state->RDRAM,address)),
+                float(ReadS16(state->RDRAM,address+2)),float(ReadS16(state->RDRAM,address+4))};
+            const float energy=data.lava_glow_cache->energy(address,point,data.water_time);
+            if(energy<=0)continue;
+            if(draw.lavaGlow.size()<draw.vertexCount())draw.lavaGlow.resize(draw.vertexCount(),0);
+            draw.lavaGlow[rsp.indices[destination+i]]=energy;
+            draw.lavaGlowActive=true;draw.lavaGlowTime=data.water_time;draw.lavaGlowStep=data.lava_glow_step;
+            draw.lavaGlowStrength=water::enhanced::lava_pulse_strength.load()*0.01F;
+            draw.lavaGlowSpeed=water::enhanced::lava_pulse_speed.load()*0.01F;
+            draw.lavaGlowIntensity=water::enhanced::lava_lighting.load()*0.01F;
+        }
+    }
+#endif
+    if (transformed_hud) {
         rsp.modelMatrixStack[data.selected_matrix] = authored_hud_matrix;
         rsp.modelViewProjChanged = true;
     }
@@ -2979,6 +3063,13 @@ void dkr::runtime::F3DDKRRT64Bridge::Triangle(RT64::State* state,
                                               RT64::DisplayList** display_list) {
     assert(active_ != nullptr);
     StateData& data = *active_->data_;
+#if defined(DKR_LOCAL_MODEL_DETAIL)
+    if(data.local_models && data.local_models->replaces_triangle(
+        std::uint32_t(reinterpret_cast<std::uintptr_t>(*display_list)-reinterpret_cast<std::uintptr_t>(state->RDRAM)))) {
+        data.vertex_cursor=0;
+        return;
+    }
+#endif
     RT64::RSP& rsp = *state->rsp;
     const std::uint32_t w0 = (*display_list)->w0;
     const std::uint32_t count = ((w0 >> 20U) & 0xFU) + 1U;

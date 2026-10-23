@@ -26,22 +26,11 @@ FOV, clipping and scenery controls affect what the camera shows. The near-plane
 and camera-obstruction improvements reduce seeing through nearby surfaces;
 report reproducible gaps with the track, position, aspect ratio and FOV.
 
-The optional **Modern camera** is for local races. Enable it and use
-**Tune the Modern camera (F7)** for its tuning panel. It is disabled online;
-changing a local follow camera inside shared simulation is not treated as a
-safe renderer-only setting.
-
-The camera keeps up with the kart through a steady corner and sits at the
-tuned distance at speed; the kart turns on screen only while a turn starts or
-ends, and when a drift starts or ends the view realigns over about half a
-second. It does not roll, and its field of view breathes only a little with
-speed. On a wall or kart hit the camera moves back with the bounce, as the
-original camera does, and its aim, zoom and FOV ignore the stop until the
-kart has its speed back; the **Hits** slider in the panel sets how long it
-waits for a kart that stays slow. A `modern-camera.ini` saved by an earlier
-build is updated on the first launch: values you had not changed follow the
-new defaults, and a changed **Distance at top speed** grows by the lag the
-old position spring used to add.
+The optional **ModernCamera++** code mod supplies camera presets, local
+profiles and live F7 tuning. Import/approve it like other Custom Magic Codes.
+Camera presentation and the shadow-interpolation correction are separate from
+shared simulation. See [Camera++](../patches/camera-plus/README.md).
+VR is unfinished and not a supported feature of this release.
 
 ## Vehicles and scenery
 
@@ -50,12 +39,17 @@ distances and retention let you choose how much remains visible. Bigger ranges
 can increase CPU work as well as GPU load. Turning them up is not a free
 performance improvement.
 
-Experimental Rollback restores eligible retail scenery billboards in a local
-visual cache, including removed tree tops. Keep-scenery, view distance and
-retention apply to that cache; they do not yet extend every actor or level
-mesh. Vehicle LOD, FOV, animated/effect ranges, water detail and CPU culling
-remain canonical there. Your saved preferences remain available for offline
-and legacy online play.
+The independent experimental online high-LOD/range work was rolled back
+after graphics and performance regressions. Do not treat parity with offline
+as a qualified release feature. This pass preserves the accepted rendering
+paths/build switches; it does not rework those experiments. Water/reflection
+presentation remains local; shared procedural wave allocation is not
+independently changed by a client.
+
+Normal local 2/3/4-player games use the offline enhancement hooks. Modern
+four-player object ranges compensate for the original additional half-range
+reduction. Enable Keep scenery before loading the race to retain eligible
+noninteractive scenery that the original multiplayer loader would discard.
 
 ## Ray tracing and water
 
@@ -67,10 +61,17 @@ The **Ray tracing & water** section has:
   presentation rate or the reflection method.
 - **Reflections:** Sky, Screen-space or Hardware ray tracing (experimental).
 - **Racer wakes** and **Water spray**.
-- **RTX lava lighting:** its own on/off tickbox, intensity, pulse and range.
-  Turning this off leaves enhanced water, reflections and the hot lava surface on.
-  Performance uses one sixteenth as many lighting pixels as High; Balanced uses
-  one quarter and is the default. These settings do not lower the game resolution.
+- **Lava lighting:** Nearby lava glow has its own on/off tickbox. It caches
+  subtle illumination on nearby static scenery and pulses
+  it in the existing colour pass, without per-frame lighting rays or an extra
+  lighting pass. It works independently of the water reflection method.
+  The old ray-traced lava lighting mode and its quality dropdown have been
+  removed. Existing selections migrate to cached glow, retaining intensity
+  and the on/off preference. Water's hardware reflections are unchanged.
+  Intensity and range affect the surrounding glow; lava brightness affects the
+  molten surface. Pulse strength/speed blend yellow-white heat into orange-red
+  heat, never darkness; surrounding light varies gently. Turning glow off keeps the
+  enhanced surface, water and reflections.
 
 Open **Advanced water settings** to adjust:
 
@@ -93,7 +94,7 @@ The panel reports the last active reflection method and allocation fallback
 status so a hardware fallback is not mistaken for a changed saved preference.
 
 Enhanced lava has moving molten cracks, rough hot-rock islands and shaded ridges.
-That surface detail does not need the surrounding RTX lighting pass. It is a
+That surface detail does not need ray-traced scene lighting. It is a
 material effect, not extra collision geometry or a full multi-bounce path tracer.
 
 Original keeps the game's water. The enhanced presets add the new water presentation
@@ -118,3 +119,14 @@ scene with Original before attributing a slowdown to netplay.
 Texture packs, their priorities and CRT filters belong in
 [Textures](TEXTURE_PACKS.md). Audio settings are covered in [Sound](SOUND.md).
 For failures and useful reports, see [troubleshooting](TROUBLESHOOTING.md).
+
+## v1.0.7 presentation corrections
+
+Original rivers/waterfalls interpolate with enhanced effects off. HD liquid
+frames promote together only when a recognised matching family is resident;
+an incomplete family remains consistently original. Pack reload/eviction
+invalidates that decision. No extra water GPU pass was added for this fix.
+
+Logo scenes, moving Start Menu names and credits use the selected viewport.
+The copyright/recompilation text has a translucent rounded backing. Credits
+include full-width fades and lower sky, with bounded native readback.

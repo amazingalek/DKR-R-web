@@ -20,6 +20,8 @@ unchanged.
 - **Online play, mods and custom tracks.** Online play needs WebRTC's transport (`DKR_NETPLAY_WEBRTC` off), and mods
   are imported by a worker process, which a page can't start (`legacy_mod_process.cpp`). N64ModernRuntime's live
   recompiler (sljit) emits machine code, so the runtime's mods are off on every page too.
+- **DKR-R's updater.** A page is updated by the site that serves it, so it configures no update service
+  (`runtime_ui.cpp`), and its `https_get` only refuses (`update_http.cpp`): no curl, no helper process, no install lock.
 - **Enhanced water**, whose shaders are Vulkan's (`DKR_ENHANCED_WATER` off), the SDL3 input host (a process of its
   own: the page reads keys and gamepads through Emscripten's SDL2), the tests, and Rev A: the page holds US v1.0's code
   alone, since Rev A's would be a second copy of the game in the wasm.

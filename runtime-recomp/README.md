@@ -1,6 +1,10 @@
 # DKR-R native recompilation runtime
 
-This is the project-owned integration layer for DKR-R 1.0.6.
+## v1.0.7 release contract
+
+Current release: v1.0.7. The complete accepted build uses the release Patch Pipeline, not this base target alone. See ../patches/release-prep/v1.0.7/BUILDING.txt. SDK 2 is additive to API 1; Store, shared personal saves and development isolation are included. Do not edit dependencies or generated guest functions.
+
+This is the project-owned integration layer for DKR-R 1.0.7.
 It combines generated DKR CPU/Rare RSP output, N64ModernRuntime, the F3DDKR/RT64
 bridge and the shared launcher/overlay.
 
@@ -21,6 +25,12 @@ Normal generated output alone is not a complete experimental release.
 See [Building](../docs/BUILDING.md) for policy composition, both owned outputs
 and the integrated feature settings. The backend is in the existing launcher,
 not a separate player application.
+
+Protocol 50 carries the linked replay-engine identity and prepared mod-resource
+proof before admission. The initial checkpoint then compares named canonical
+contract fields; never bypass a mismatch to make two platforms connect.
+See [Online](../docs/ONLINE_MULTIPLAYER.md) and
+[release validation](../RELEASE-VALIDATION.md).
 
 ## Reproducible patch boundary
 

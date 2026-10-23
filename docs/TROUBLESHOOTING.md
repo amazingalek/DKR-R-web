@@ -1,5 +1,9 @@
 # Troubleshooting DKR-R
 
+## v1.0.7 release contract
+
+Normal mods share one personal Adventure. Check portable/profile location and Backups & Recovery before restoring. Keep installation receipts/recovery folders. Export logs/support details; report the exact release, ROM revision, course, packs and settings. The accepted HD-water startup fix is included; a hardware-specific problem still needs its own report.
+
 Start with the symptom and keep the original data. Please don't delete your
 saves or whole profile to troubleshoot a graphics, mod or connection failure.
 
@@ -57,6 +61,13 @@ Send host and client logs from the same attempt. Include player count, backend,
 delay/window, enabled mods, scene, and whether the overlay responds.
 Don't publish private codes or profile keys.
 See [Online](ONLINE_MULTIPLAYER.md) for direct-routing limits.
+
+In 1.0.7, a compatibility failure names its component. A replay-engine mismatch
+usually means different builds, even if filenames look similar. Prepared-mod
+mismatches need the host's exact verified resources, not just matching names.
+Checkpoint size/schema, launch, save and epoch failures need paired logs for
+diagnosis; don't delete offline saves or bypass the check. Use the complete
+same release on Windows and Linux/SteamOS before retrying.
 
 ## Graphics or uneven presentation
 
