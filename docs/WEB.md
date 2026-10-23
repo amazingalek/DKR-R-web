@@ -14,7 +14,8 @@ unchanged.
   browser's file picker, and Start Game once a ROM is kept. The ROM stays in the browser (IndexedDB, through
   N64Recomp-browser's `persistent_home.js`). The game runs on the settings it has, but always in DKR-R's Modern profile
   (`runtime_ui.cpp`), the one that interpolates, since a page has no overlay to pick one: Accurate, the desktop's
-  default, holds RT64 at Original and 30. Modern's Match display is RT64's Display on a page (`rt64_renderer.cpp`),
+  default, holds RT64 at Original and 30. It plays Modern widescreen, Modern's own default: a first run's settings
+  would give it the runtime's starting 4:3, which nothing on a page can change. Modern's Match display is RT64's Display on a page (`rt64_renderer.cpp`),
   since SDL's Emscripten port reports no refresh rate, so RT64 interpolates the game's 30 frames a second to the
   display's rate. Original water, no generated mipmaps.
 - **Online play, mods and custom tracks.** Online play needs WebRTC's transport (`DKR_NETPLAY_WEBRTC` off), and mods

@@ -2635,7 +2635,10 @@ void LoadSettings() {
 #if defined(__EMSCRIPTEN__)
     // A page always plays Modern, the profile that interpolates: every N64Recomp-browser page presents at the
     // display's rate (its README, The recomp's own code), and a page has no launcher or overlay to pick one.
+    // It plays it widescreen, Modern's own default (g_modern_aspect): a first run's settings take Modern's aspect
+    // from the runtime's starting 4:3 (RememberModernGraphics above), and a page has no Graphics page to change it.
     profile = dkr::runtime::enhancements::PresentationProfile::Modern;
+    g_modern_aspect = AspectRatio::Expand;
 #endif
     dkr::runtime::enhancements::set_presentation_profile(profile);
     ApplyProfileGraphics(config, profile);
