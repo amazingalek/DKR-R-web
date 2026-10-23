@@ -172,8 +172,9 @@ fi
 # --- 5. The page ---
 step "Page"
 embuilder build sdl2-mt freetype-legacysjlj > /dev/null
-# runtime-recomp/CMakeLists.txt turns off what a page can't have when it configures with Emscripten.
+# runtime-recomp/CMakeLists.txt turns off what a page can't have when it configures with Emscripten. Custom Magic Codes
+# stage their dispatch from the config the recompiled code came from (DKR_CODE_POLICY_V77, CustomMagicCodes.cmake).
 [[ -f build-web/build.ninja ]] || emcmake cmake -S runtime-recomp -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DDKR_RELEASE_VERSION="$(cat VERSION)" -DDKR_RUNTIME_BUILD_GENERATED=ON \
-    -DDKR_GENERATED_SOURCE_V77="$root/$work/RecompiledFuncs" -DRT64_NAGA_EXECUTABLE="$(command -v naga)"
+    -DDKR_GENERATED_SOURCE_V77="$root/$work/RecompiledFuncs" -DDKR_CODE_POLICY_V77="$root/$work/dkr.us.v77.toml"     -DRT64_NAGA_EXECUTABLE="$(command -v naga)"
 ninja -C build-web DKRPortGame
