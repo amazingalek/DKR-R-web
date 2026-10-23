@@ -6,6 +6,12 @@
 #include <atomic>
 #include <cstdio>
 
+// A build without the Rev A payload (the web page's, CMakeLists.txt) defines
+// this as 0.
+#ifndef DKR_RUNTIME_HAS_V80
+#define DKR_RUNTIME_HAS_V80 1
+#endif
+
 extern "C" {thread_local int dkr_code_callbacks_enabled=0;thread_local const std::uint8_t* dkr_code_hook_mask=nullptr;}
 namespace dkr::runtime::code_mods {
 namespace {
@@ -40,8 +46,13 @@ void validate_online(const mods::code::FrozenSet& code,rom::Revision revision) {
 void begin(std::shared_ptr<const mods::code::FrozenSet> code,rom::Revision revision,std::uint64_t seed,bool online) {
     reset();if(!code||code->ordered.empty())return;
     std::size_t count=0;
+#if DKR_RUNTIME_HAS_V80
     const auto* entries=revision==rom::Revision::UsV77?dkr_v77_code_dispatch_table(&count):
         revision==rom::Revision::UsV80?dkr_v80_code_dispatch_table(&count):nullptr;
+#else
+    // A build without the Rev A payload (the web page's, CMakeLists.txt) has no Rev A dispatcher either.
+    const auto* entries=revision==rom::Revision::UsV77?dkr_v77_code_dispatch_table(&count):nullptr;
+#endif
     if(!entries)throw mods::Error("The selected ROM has no Custom Magic Code CPU dispatcher.");
     auto next=std::make_shared<Session>();next->frozen=std::move(code);
     next->world=std::make_shared<mods::code::GameWorld>(*next->frozen,mods::online::asset_revision(revision),
